@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { COMMENT_MARKER, countActions, diffEnvironment, formatPlan, formatPlanMarkdown, type LiveFlags } from "./diff.js";
+import {
+  COMMENT_MARKER,
+  countActions,
+  diffEnvironment,
+  formatPlan,
+  formatPlanMarkdown,
+  sortByEnvironment,
+  type LiveFlags,
+} from "./diff.js";
 import type { FlagFile } from "./flagfile.js";
 
 const live = (entries: Record<string, [boolean, string | number | boolean | null]>): LiveFlags =>
@@ -57,6 +65,22 @@ describe("formatPlanMarkdown", () => {
     expect(md).toContain("No flag changes.");
     expect(md).not.toContain("approve");
   });
+
+  it("lists unchanged environments on one line instead of a section each", () => {
+    const changed = diffEnvironment(wanted({ a: { enabled: true, value: null } }), live({ a: [false, null] }));
+    const same = { environment: "Staging", changes: [] };
+    const md = formatPlanMarkdown([same, changed]);
+    expect(md).toContain("**1 change** will be applied");
+    expect(md).not.toContain("### Staging");
+    expect(md).toContain("No changes in: Staging.");
+  });
+});
+
+describe("sortByEnvironment", () => {
+  it("puts development first and production last", () => {
+    const names = ["Production", "Staging", "Development", "QA"].map((environment) => ({ environment }));
+    expect(sortByEnvironment(names).map((p) => p.environment)).toEqual(["Development", "QA", "Staging", "Production"]);
+  });
 });
 
 describe("countActions and formatPlan", () => {
@@ -72,7 +96,7 @@ describe("countActions and formatPlan", () => {
         "  ~ a: off -> on",
         "  ! old: in Flagsmith but not in YAML (left alone)",
         "",
-        "1 change(s) to apply.",
+        "1 change to apply.",
       ].join("\n"),
     );
   });

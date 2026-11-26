@@ -4,7 +4,6 @@
 import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 const input = (name: string) => (process.env[`INPUT_${name}`] ?? "").trim();
 
@@ -28,7 +27,9 @@ for (const env of input("ENVIRONMENTS").split(",").map((e) => e.trim()).filter(B
   args.push("--env", env);
 }
 
-const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), "cli.js");
+// dist/cli.cjs inside the action's folder (GitHub sets GITHUB_ACTION_PATH).
+const actionRoot = process.env.GITHUB_ACTION_PATH ?? path.resolve(path.dirname(process.argv[1]), "..");
+const cli = path.join(actionRoot, "dist", "cli.cjs");
 const runnerTemp = process.env.RUNNER_TEMP ?? ".";
 const planFile = path.join(runnerTemp, "flagops-plan.md");
 

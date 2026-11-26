@@ -54,6 +54,22 @@ export function countActions(plans: EnvironmentPlan[]): number {
   return plans.reduce((n, p) => n + p.changes.filter((c) => c.kind !== "untracked").length, 0);
 }
 
+const changesLabel = (n: number) => `${n} change${n === 1 ? "" : "s"}`;
+
+// Order environments the way changes flow: development first, then staging, production last.
+function environmentRank(name: string): number {
+  const n = name.toLowerCase();
+  if (n.includes("prod") || n === "live") return 2;
+  if (n.includes("stag") || n.includes("qa") || n.includes("test") || n.includes("uat")) return 1;
+  return 0;
+}
+
+export function sortByEnvironment<T extends { environment: string }>(plans: T[]): T[] {
+  return [...plans].sort(
+    (a, b) => environmentRank(a.environment) - environmentRank(b.environment) || a.environment.localeCompare(b.environment),
+  );
+}
+
 const show = (v: FlagValue) => (v === null ? "null" : JSON.stringify(v));
 
 function describe(change: Change): string {
@@ -84,15 +100,12 @@ const onOff = (enabled: boolean) => (enabled ? "on" : "off");
 export function formatPlanMarkdown(plans: EnvironmentPlan[], productionNames: string[] = ["production"]): string {
   const actions = countActions(plans);
   const lines: string[] = [COMMENT_MARKER, "## FlagOps plan", ""];
-  lines.push(actions === 0 ? "No flag changes." : `**${actions} change(s)** will be applied when this is merged.`);
+  lines.push(actions === 0 ? "No flag changes." : `**${changesLabel(actions)}** will be applied when this is merged.`);
 
   for (const p of plans) {
+    if (p.changes.length === 0) continue;
     const isProd = productionNames.includes(p.environment.toLowerCase());
     lines.push("", `### ${p.environment}${isProd ? " (production)" : ""}`, "");
-    if (p.changes.length === 0) {
-      lines.push("No changes.");
-      continue;
-    }
     if (isProd && p.changes.some((c) => c.kind !== "untracked")) {
       lines.push("> [!WARNING]", "> Changes production. A reviewer must approve before they apply.", "");
     }
@@ -107,6 +120,9 @@ export function formatPlanMarkdown(plans: EnvironmentPlan[], productionNames: st
       }
     }
   }
+
+  const unchanged = plans.filter((p) => p.changes.length === 0).map((p) => p.environment);
+  if (unchanged.length > 0 && actions > 0) lines.push("", `No changes in: ${unchanged.join(", ")}.`);
   return lines.join("\n") + "\n";
 }
 
@@ -119,6 +135,6 @@ export function formatPlan(plans: EnvironmentPlan[]): string {
   }
   const actions = countActions(plans);
   lines.push("");
-  lines.push(actions === 0 ? "Nothing to apply." : `${actions} change(s) to apply.`);
+  lines.push(actions === 0 ? "Nothing to apply." : `${changesLabel(actions)} to apply.`);
   return lines.join("\n");
 }

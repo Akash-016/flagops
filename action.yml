@@ -44,19 +44,12 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@v5
       with:
         node-version: 22
 
+    # dist/ is a prebuilt bundle with no dependencies, so there is nothing to install.
     # Steps run with Node, not bash, so they work on Linux, macOS and Windows runners.
-    - name: Build FlagOps
-      shell: node {0}
-      run: |
-        const { execSync } = require("node:child_process");
-        const opts = { cwd: process.env.GITHUB_ACTION_PATH, stdio: "inherit" };
-        execSync("npm ci --no-audit --no-fund --loglevel=error", opts);
-        execSync("npm run build --silent", opts);
-
     - name: Run flagops ${{ inputs.command }}
       id: run
       shell: node {0}
@@ -68,13 +61,11 @@ runs:
         INPUT_DIR: ${{ inputs.dir }}
         INPUT_ENVIRONMENTS: ${{ inputs.environments }}
       run: |
-        const { pathToFileURL } = require("node:url");
-        const path = require("node:path");
-        import(pathToFileURL(path.join(process.env.GITHUB_ACTION_PATH, "dist", "action.js")).href);
+        require(require("node:path").join(process.env.GITHUB_ACTION_PATH, "dist", "action.cjs"));
 
     - name: Post plan on the pull request
       if: inputs.command == 'plan' && inputs.comment == 'true' && github.event_name == 'pull_request'
-      uses: actions/github-script@v7
+      uses: actions/github-script@v8
       env:
         PLAN_FILE: ${{ steps.run.outputs.plan-file }}
       with:

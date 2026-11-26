@@ -4,7 +4,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseFlagFile, type FlagFile } from "./flagfile.js";
 import type { Environment, Feature, FlagsmithClient } from "./flagsmith.js";
-import { diffEnvironment, type EnvironmentPlan, type LiveFlags } from "./diff.js";
+import { diffEnvironment, sortByEnvironment, type EnvironmentPlan, type LiveFlags } from "./diff.js";
 
 export async function readFlagFiles(dir: string): Promise<FlagFile[]> {
   let names: string[];
@@ -76,5 +76,5 @@ export async function buildPlans(
     const live = await readLiveFlags(fs, env, features);
     plans.push({ ...diffEnvironment(file, live), env });
   }
-  return plans;
+  return sortByEnvironment(plans);
 }

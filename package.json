@@ -4,11 +4,12 @@
   "description": "Manage Flagsmith flags like code: every change reviewed in a pull request.",
   "type": "module",
   "bin": {
-    "flagops": "dist/cli.js"
+    "flagops": "dist/cli.cjs"
   },
   "scripts": {
     "dev": "tsx src/cli.ts",
-    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && esbuild src/cli.ts src/action.ts --bundle --platform=node --target=node20 --format=cjs --outdir=dist --out-extension:.js=.cjs --log-level=warning",
     "test": "vitest run",
     "seed": "tsx scripts/seed.ts"
   },
@@ -22,6 +23,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.11",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.1.2"
