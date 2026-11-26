@@ -15,6 +15,12 @@ function fail(message: string): never {
 
 const command = input("COMMAND");
 if (command !== "plan" && command !== "apply") fail(`command must be plan or apply, got '${command}'`);
+if (!process.env.FLAGSMITH_ADMIN_KEY?.trim()) {
+  fail("admin-key is empty. Add a repository secret FLAGSMITH_ADMIN_KEY (Settings -> Secrets and variables -> Actions).");
+}
+if (!process.env.FLAGSMITH_API_URL?.trim()) {
+  fail("api-url is empty. Add a repository variable FLAGSMITH_API_URL (Settings -> Secrets and variables -> Actions -> Variables).");
+}
 
 const args = ["--dir", input("DIR") || "flags"];
 if (input("PROJECT")) args.push("--project", input("PROJECT"));
