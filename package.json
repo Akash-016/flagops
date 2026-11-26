@@ -1,0 +1,28 @@
+{
+  "name": "flagops",
+  "version": "0.1.0",
+  "description": "Manage Flagsmith flags like code: every change reviewed in a pull request.",
+  "type": "module",
+  "bin": {
+    "flagops": "dist/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "author": "Akash V",
+  "dependencies": {
+    "commander": "^15.1.0",
+    "dotenv": "^18.0.10",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.11",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.2"
+  }
+}
