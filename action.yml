@@ -1,0 +1,94 @@
+name: FlagOps
+description: Manage Flagsmith flags like code. Plan flag changes on pull requests, apply them on merge.
+author: Akash V
+branding:
+  icon: flag
+  color: purple
+
+inputs:
+  command:
+    description: "plan or apply"
+    required: true
+  api-url:
+    description: "Flagsmith API URL, e.g. https://flagsmith.example.com/api/v1"
+    required: true
+  admin-key:
+    description: "Flagsmith Admin API key (store it as a secret)"
+    required: true
+  project:
+    description: "Flagsmith project id or name (only needed if there are several)"
+    required: false
+    default: ""
+  dir:
+    description: "Folder with the flag files"
+    required: false
+    default: "flags"
+  environments:
+    description: "Comma-separated environment names to include (default: all files)"
+    required: false
+    default: ""
+  comment:
+    description: "For plan on a pull request: post the plan as a comment (true/false)"
+    required: false
+    default: "true"
+  github-token:
+    description: "Token used to post the pull request comment"
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  changes:
+    description: "Number of changes the plan contains"
+    value: ${{ steps.run.outputs.changes }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    # Steps run with Node, not bash, so they work on Linux, macOS and Windows runners.
+    - name: Build FlagOps
+      shell: node {0}
+      run: |
+        const { execSync } = require("node:child_process");
+        const opts = { cwd: process.env.GITHUB_ACTION_PATH, stdio: "inherit" };
+        execSync("npm ci --no-audit --no-fund --loglevel=error", opts);
+        execSync("npm run build --silent", opts);
+
+    - name: Run flagops ${{ inputs.command }}
+      id: run
+      shell: node {0}
+      env:
+        FLAGSMITH_API_URL: ${{ inputs.api-url }}
+        FLAGSMITH_ADMIN_KEY: ${{ inputs.admin-key }}
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_PROJECT: ${{ inputs.project }}
+        INPUT_DIR: ${{ inputs.dir }}
+        INPUT_ENVIRONMENTS: ${{ inputs.environments }}
+      run: |
+        const { pathToFileURL } = require("node:url");
+        const path = require("node:path");
+        import(pathToFileURL(path.join(process.env.GITHUB_ACTION_PATH, "dist", "action.js")).href);
+
+    - name: Post plan on the pull request
+      if: inputs.command == 'plan' && inputs.comment == 'true' && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      env:
+        PLAN_FILE: ${{ steps.run.outputs.plan-file }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require("fs");
+          const body = fs.readFileSync(process.env.PLAN_FILE, "utf8");
+          const marker = "<!-- flagops-plan -->";
+          const { owner, repo } = context.repo;
+          const issue_number = context.issue.number;
+          const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+          const mine = comments.find((c) => c.body && c.body.startsWith(marker));
+          if (mine) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          }
