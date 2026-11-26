@@ -80,6 +80,25 @@ describe("formatPlanMarkdown", () => {
   });
 });
 
+describe("blast radius in the plan", () => {
+  it("lists where each changed flag is used, but not untracked ones", () => {
+    const plan = diffEnvironment(
+      wanted({ cart: { enabled: true, value: 25 }, banner: { enabled: true, value: null } }),
+      live({ cart: [true, 10], banner: [false, null], old: [true, null] }),
+    );
+    const refs = new Map([
+      ["cart", [{ file: "src/cart.ts", line: 4 }]],
+      ["banner", []],
+    ]);
+    const md = formatPlanMarkdown([plan], refs);
+    expect(md).toContain("### Where these flags are used");
+    expect(md).toContain("- `banner`: not found in code");
+    expect(md).toContain("- `cart`: `src/cart.ts:4`");
+    expect(md).not.toContain("- `old`");
+    expect(formatPlan([plan], refs)).toContain("  cart: src/cart.ts:4");
+  });
+});
+
 describe("drift", () => {
   it("reports changed, deleted and added flags from Git's point of view", () => {
     const plan = diffEnvironment(

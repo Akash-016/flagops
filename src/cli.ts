@@ -6,7 +6,16 @@ import { getConfig } from "./config.js";
 import { FlagsmithClient, type Project } from "./flagsmith.js";
 import { buildFlagFile, fileNameFor, toYaml } from "./flagfile.js";
 import { createInterface } from "node:readline/promises";
-import { countActions, countDrift, formatDrift, formatDriftMarkdown, formatPlan, formatPlanMarkdown } from "./diff.js";
+import {
+  changedFlags,
+  countActions,
+  countDrift,
+  formatDrift,
+  formatDriftMarkdown,
+  formatPlan,
+  formatPlanMarkdown,
+} from "./diff.js";
+import { findReferences } from "./references.js";
 import { buildPlans } from "./state.js";
 import { applyPlans } from "./apply.js";
 
@@ -73,6 +82,15 @@ program
 
 const collect = (value: string, previous: string[] = []) => [...previous, value];
 
+interface PlanOptions {
+  project?: string;
+  dir: string;
+  env?: string[];
+  format: string;
+  out?: string;
+  code: string | false; // false when --no-code is given
+}
+
 program
   .command("plan")
   .description("Show what apply would change, without changing anything")
@@ -81,12 +99,15 @@ program
   .option("-e, --env <name>", "only this environment (repeat for more)", collect)
   .option("-f, --format <format>", "text or markdown", "text")
   .option("-o, --out <file>", "also write the plan to this file")
-  .action(async (opts: { project?: string; dir: string; env?: string[]; format: string; out?: string }) => {
+  .option("--code <dir>", "folder to search for code that uses changed flags", ".")
+  .option("--no-code", "don't search the code")
+  .action(async (opts: PlanOptions) => {
     if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
     const fs = client();
     const project = await resolveProject(fs, opts.project);
     const plans = await buildPlans(fs, project.id, opts.dir, opts.env);
-    const output = opts.format === "markdown" ? formatPlanMarkdown(plans) : formatPlan(plans);
+    const refs = opts.code === false ? undefined : await findReferences(opts.code, changedFlags(plans), [opts.dir]);
+    const output = opts.format === "markdown" ? formatPlanMarkdown(plans, refs) : formatPlan(plans, refs);
     console.log(output);
     if (opts.out) await writeFile(opts.out, output, "utf8");
   });

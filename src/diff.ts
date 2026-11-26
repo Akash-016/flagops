@@ -2,6 +2,7 @@
 
 import type { FlagFile } from "./flagfile.js";
 import type { FlagValue } from "./flagsmith.js";
+import { formatReferences, type Reference } from "./references.js";
 
 export interface FlagSetting {
   enabled: boolean;
@@ -97,7 +98,33 @@ export const COMMENT_MARKER = "<!-- flagops-plan -->";
 const cell = (v: FlagValue) => "`" + show(v).replace(/\|/g, "\\|") + "`";
 const onOff = (enabled: boolean) => (enabled ? "on" : "off");
 
-export function formatPlanMarkdown(plans: EnvironmentPlan[], productionNames: string[] = ["production"]): string {
+// Flags that apply would change or create (the ones whose blast radius matters).
+export function changedFlags(plans: EnvironmentPlan[]): string[] {
+  const names = new Set<string>();
+  for (const p of plans) for (const c of p.changes) if (c.kind !== "untracked") names.add(c.flag);
+  return [...names].sort();
+}
+
+function referencesMarkdown(plans: EnvironmentPlan[], refs?: Map<string, Reference[]>): string[] {
+  const flags = changedFlags(plans);
+  if (!refs || flags.length === 0) return [];
+  const lines = ["", "### Where these flags are used", ""];
+  const max = 5;
+  for (const flag of flags) {
+    const found = refs.get(flag) ?? [];
+    let where = "not found in code";
+    if (found.length > 0) {
+      where = found.slice(0, max).map((r) => `\`${r.file}:${r.line}\``).join(", ");
+      if (found.length > max) where += ` (+${found.length - max} more)`;
+    }
+    lines.push(`- \`${flag}\`: ${where}`);
+  }
+  return lines;
+}
+
+const productionNames = ["production"];
+
+export function formatPlanMarkdown(plans: EnvironmentPlan[], refs?: Map<string, Reference[]>): string {
   const actions = countActions(plans);
   const lines: string[] = [COMMENT_MARKER, "## FlagOps plan", ""];
   lines.push(actions === 0 ? "No flag changes." : `**${changesLabel(actions)}** will be applied when this is merged.`);
@@ -123,6 +150,7 @@ export function formatPlanMarkdown(plans: EnvironmentPlan[], productionNames: st
 
   const unchanged = plans.filter((p) => p.changes.length === 0).map((p) => p.environment);
   if (unchanged.length > 0 && actions > 0) lines.push("", `No changes in: ${unchanged.join(", ")}.`);
+  lines.push(...referencesMarkdown(plans, refs));
   return lines.join("\n") + "\n";
 }
 
@@ -198,12 +226,17 @@ export function formatDrift(plans: EnvironmentPlan[]): string {
   return lines.join("\n");
 }
 
-export function formatPlan(plans: EnvironmentPlan[]): string {
+export function formatPlan(plans: EnvironmentPlan[], refs?: Map<string, Reference[]>): string {
   const lines: string[] = [];
   for (const p of plans) {
     lines.push(`${p.environment}:`);
     if (p.changes.length === 0) lines.push("  no changes");
     else lines.push(...p.changes.map(describe));
+  }
+  const flags = changedFlags(plans);
+  if (refs && flags.length > 0) {
+    lines.push("", "Used in:");
+    for (const flag of flags) lines.push(`  ${flag}: ${formatReferences(refs.get(flag) ?? [])}`);
   }
   const actions = countActions(plans);
   lines.push("");
