@@ -86,6 +86,19 @@ export class FlagsmithClient {
     return states.filter((s) => s.identity === null && s.feature_segment === null);
   }
 
+  // Creates the flag in every environment of the project, switched off with no value.
+  createFeature(projectId: number, name: string): Promise<Feature> {
+    return this.request<Feature>(`${this.apiUrl}/projects/${projectId}/features/`, {
+      method: "POST",
+      body: JSON.stringify({ name, default_enabled: false, initial_value: null }),
+    });
+  }
+
+  async findEnvironmentState(envApiKey: string, featureId: number): Promise<FeatureState | undefined> {
+    const states = await this.getAll<FeatureState>(`/environments/${envApiKey}/featurestates/?feature=${featureId}`);
+    return states.find((s) => s.feature === featureId && s.identity === null && s.feature_segment === null);
+  }
+
   updateState(envApiKey: string, stateId: number, change: { enabled?: boolean; feature_state_value?: FlagValue }) {
     return this.request(`${this.apiUrl}/environments/${envApiKey}/featurestates/${stateId}/`, {
       method: "PATCH",

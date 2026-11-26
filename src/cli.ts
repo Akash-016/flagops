@@ -5,6 +5,10 @@ import { Command } from "commander";
 import { getConfig } from "./config.js";
 import { FlagsmithClient, type Project } from "./flagsmith.js";
 import { buildFlagFile, fileNameFor, toYaml } from "./flagfile.js";
+import { createInterface } from "node:readline/promises";
+import { countActions, formatPlan, formatPlanMarkdown } from "./diff.js";
+import { buildPlans } from "./state.js";
+import { applyPlans } from "./apply.js";
 
 const program = new Command();
 
@@ -67,13 +71,61 @@ program
     }
   });
 
-program.command("plan").description("Show what apply would change").action(() => {
-  console.log("plan: not built yet");
-});
+const collect = (value: string, previous: string[] = []) => [...previous, value];
 
-program.command("apply").description("Push YAML changes to Flagsmith").action(() => {
-  console.log("apply: not built yet");
-});
+program
+  .command("plan")
+  .description("Show what apply would change, without changing anything")
+  .option("-p, --project <id-or-name>", "Flagsmith project")
+  .option("-d, --dir <dir>", "folder with the flag files", "flags")
+  .option("-e, --env <name>", "only this environment (repeat for more)", collect)
+  .option("-f, --format <format>", "text or markdown", "text")
+  .option("-o, --out <file>", "also write the plan to this file")
+  .action(async (opts: { project?: string; dir: string; env?: string[]; format: string; out?: string }) => {
+    if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
+    const fs = client();
+    const project = await resolveProject(fs, opts.project);
+    const plans = await buildPlans(fs, project.id, opts.dir, opts.env);
+    const output = opts.format === "markdown" ? formatPlanMarkdown(plans) : formatPlan(plans);
+    console.log(output);
+    if (opts.out) await writeFile(opts.out, output, "utf8");
+  });
+
+program
+  .command("apply")
+  .description("Make Flagsmith match the YAML files (never deletes flags)")
+  .option("-p, --project <id-or-name>", "Flagsmith project")
+  .option("-d, --dir <dir>", "folder with the flag files", "flags")
+  .option("-e, --env <name>", "only this environment (repeat for more)", collect)
+  .option("-y, --yes", "don't ask for confirmation (for CI)")
+  .action(async (opts: { project?: string; dir: string; env?: string[]; yes?: boolean }) => {
+    const fs = client();
+    const project = await resolveProject(fs, opts.project);
+    const plans = await buildPlans(fs, project.id, opts.dir, opts.env);
+    console.log(formatPlan(plans));
+    if (countActions(plans) === 0) return;
+
+    if (!opts.yes) {
+      if (!process.stdin.isTTY) throw new Error("Not asking for confirmation without a terminal. Use --yes.");
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await rl.question("\nApply these changes? (y/n) ");
+      rl.close();
+      if (answer.trim().toLowerCase() !== "y") {
+        console.log("Nothing changed.");
+        return;
+      }
+    }
+
+    const result = await applyPlans(fs, project.id, plans);
+    console.log("");
+    for (const line of result.applied) console.log(`  done   ${line}`);
+    if (result.failed) {
+      console.error(`  FAILED ${result.failed.what}\n         ${result.failed.error}`);
+      console.error(`\nStopped after ${result.applied.length} change(s). Run "flagops plan" to see what is left.`);
+      process.exit(1);
+    }
+    console.log(`\nApplied ${result.applied.length} change(s).`);
+  });
 
 program.parseAsync().catch((err: Error) => {
   console.error(err.message);
