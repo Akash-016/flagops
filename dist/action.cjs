@@ -32,7 +32,7 @@ function fail(message) {
   process.exit(1);
 }
 var command = input("COMMAND");
-if (command !== "plan" && command !== "apply") fail(`command must be plan or apply, got '${command}'`);
+if (!["plan", "apply", "drift"].includes(command)) fail(`command must be plan, apply or drift, got '${command}'`);
 if (!process.env.FLAGSMITH_ADMIN_KEY?.trim()) {
   fail("admin-key is empty. Add a repository secret FLAGSMITH_ADMIN_KEY (Settings -> Secrets and variables -> Actions).");
 }
@@ -47,17 +47,26 @@ for (const env of input("ENVIRONMENTS").split(",").map((e) => e.trim()).filter(B
 var actionRoot = process.env.GITHUB_ACTION_PATH ?? import_node_path.default.resolve(import_node_path.default.dirname(process.argv[1]), "..");
 var cli = import_node_path.default.join(actionRoot, "dist", "cli.cjs");
 var runnerTemp = process.env.RUNNER_TEMP ?? ".";
-var planFile = import_node_path.default.join(runnerTemp, "flagops-plan.md");
-var extra = command === "plan" ? ["--format", "markdown", "--out", planFile] : ["--yes"];
+var reportFile = import_node_path.default.join(runnerTemp, `flagops-${command}.md`);
+var extra = command === "apply" ? ["--yes"] : ["--format", "markdown", "--out", reportFile];
 var result = (0, import_node_child_process.spawnSync)(process.execPath, [cli, command, ...args, ...extra], { stdio: "inherit" });
-if (result.status !== 0) process.exit(result.status ?? 1);
-if (command === "plan") {
-  const plan = (0, import_node_fs.readFileSync)(planFile, "utf8");
-  const changes = /\*\*(\d+) change/.exec(plan)?.[1] ?? "0";
-  if (process.env.GITHUB_STEP_SUMMARY) (0, import_node_fs.appendFileSync)(process.env.GITHUB_STEP_SUMMARY, plan);
-  if (process.env.GITHUB_OUTPUT) {
-    (0, import_node_fs.appendFileSync)(process.env.GITHUB_OUTPUT, `plan-file=${planFile}
-changes=${changes}
+var status = result.status ?? 1;
+if (status !== 0 && !(command === "drift" && status === 2)) process.exit(status);
+var output = (lines) => {
+  if (process.env.GITHUB_OUTPUT) (0, import_node_fs.appendFileSync)(process.env.GITHUB_OUTPUT, lines);
+};
+if (command !== "apply") {
+  const report = (0, import_node_fs.readFileSync)(reportFile, "utf8");
+  if (process.env.GITHUB_STEP_SUMMARY) (0, import_node_fs.appendFileSync)(process.env.GITHUB_STEP_SUMMARY, report);
+  output(`report-file=${reportFile}
 `);
-  }
+}
+if (command === "plan") {
+  output(`changes=${/\*\*(\d+) change/.exec((0, import_node_fs.readFileSync)(reportFile, "utf8"))?.[1] ?? "0"}
+`);
+}
+if (command === "drift") {
+  output(`drift=${status === 2}
+`);
+  if (status === 2) console.log("::warning::Flagsmith has drifted from the flag files in Git.");
 }

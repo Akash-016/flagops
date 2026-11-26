@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   COMMENT_MARKER,
+  DRIFT_MARKER,
   countActions,
+  countDrift,
   diffEnvironment,
+  formatDrift,
+  formatDriftMarkdown,
   formatPlan,
   formatPlanMarkdown,
   sortByEnvironment,
@@ -73,6 +77,30 @@ describe("formatPlanMarkdown", () => {
     expect(md).toContain("**1 change** will be applied");
     expect(md).not.toContain("### Staging");
     expect(md).toContain("No changes in: Staging.");
+  });
+});
+
+describe("drift", () => {
+  it("reports changed, deleted and added flags from Git's point of view", () => {
+    const plan = diffEnvironment(
+      wanted({ cart: { enabled: true, value: 10 }, gone: { enabled: true, value: null } }),
+      live({ cart: [true, 99], extra: [false, null] }),
+    );
+    expect(countDrift([plan])).toBe(3);
+    const md = formatDriftMarkdown([plan]);
+    expect(md.startsWith(DRIFT_MARKER)).toBe(true);
+    expect(md).toContain("**3 flags** in Flagsmith no longer match");
+    expect(md).toContain("| `cart` | on, `10` | **on, `99`** | changed outside Git |");
+    expect(md).toContain("| `gone` | on, `null` | **missing** | deleted outside Git |");
+    expect(md).toContain("| `extra` | (not in Git) | **off, `null`** | added outside Git |");
+    expect(formatDrift([plan])).toContain("cart: Git says on, 10, Flagsmith has on, 99 (changed outside Git)");
+  });
+
+  it("reports no drift when everything matches", () => {
+    const plan = diffEnvironment(wanted({ a: { enabled: true, value: null } }), live({ a: [true, null] }));
+    expect(countDrift([plan])).toBe(0);
+    expect(formatDriftMarkdown([plan])).toContain("## No flag drift");
+    expect(formatDrift([plan])).toBe("No drift: Flagsmith matches the flag files.");
   });
 });
 

@@ -30866,6 +30866,69 @@ function formatPlanMarkdown(plans, productionNames = ["production"]) {
   if (unchanged.length > 0 && actions > 0) lines.push("", `No changes in: ${unchanged.join(", ")}.`);
   return lines.join("\n") + "\n";
 }
+var DRIFT_MARKER = "<!-- flagops-drift -->";
+function countDrift(plans) {
+  return plans.reduce((n, p) => n + p.changes.length, 0);
+}
+function describeDrift(c) {
+  switch (c.kind) {
+    case "update":
+      return {
+        git: `${onOff(c.after.enabled)}, ${cell(c.after.value)}`,
+        live: `${onOff(c.before.enabled)}, ${cell(c.before.value)}`,
+        what: "changed outside Git"
+      };
+    case "create":
+      return { git: `${onOff(c.after.enabled)}, ${cell(c.after.value)}`, live: "missing", what: "deleted outside Git" };
+    case "untracked":
+      return { git: "(not in Git)", live: `${onOff(c.before.enabled)}, ${cell(c.before.value)}`, what: "added outside Git" };
+  }
+}
+function formatDriftMarkdown(plans) {
+  const total = countDrift(plans);
+  const lines = [DRIFT_MARKER];
+  if (total === 0) {
+    lines.push("## No flag drift", "", "Flagsmith matches the flag files in Git.");
+    return lines.join("\n") + "\n";
+  }
+  lines.push(
+    "## Flag drift detected",
+    "",
+    `**${total} flag${total === 1 ? "" : "s"}** in Flagsmith no longer ${total === 1 ? "matches" : "match"} the flag files in Git. Someone probably changed them in the Flagsmith dashboard.`
+  );
+  for (const p of plans) {
+    if (p.changes.length === 0) continue;
+    lines.push("", `### ${p.environment}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
+    for (const c of p.changes) {
+      const d = describeDrift(c);
+      lines.push(`| \`${c.flag}\` | ${d.git} | **${d.live}** | ${d.what} |`);
+    }
+  }
+  lines.push(
+    "",
+    "**To fix, pick one:**",
+    "- Put Flagsmith back to what Git says: re-run the FlagOps apply workflow (or `flagops apply`).",
+    "- Keep the dashboard change: run `flagops pull` and open a pull request with the updated files.",
+    "",
+    "This issue closes itself once Flagsmith and Git match again."
+  );
+  return lines.join("\n") + "\n";
+}
+function formatDrift(plans) {
+  const total = countDrift(plans);
+  if (total === 0) return "No drift: Flagsmith matches the flag files.";
+  const lines = [];
+  for (const p of plans) {
+    if (p.changes.length === 0) continue;
+    lines.push(`${p.environment}:`);
+    for (const c of p.changes) {
+      const d = describeDrift(c);
+      lines.push(`  ${c.flag}: Git says ${d.git.replace(/`/g, "")}, Flagsmith has ${d.live.replace(/`/g, "")} (${d.what})`);
+    }
+  }
+  lines.push("", `Drift found in ${total} flag${total === 1 ? "" : "s"}.`);
+  return lines.join("\n");
+}
 function formatPlan(plans) {
   const lines = [];
   for (const p of plans) {
@@ -31026,6 +31089,16 @@ program2.command("plan").description("Show what apply would change, without chan
   const output2 = opts.format === "markdown" ? formatPlanMarkdown(plans) : formatPlan(plans);
   console.log(output2);
   if (opts.out) await (0, import_promises2.writeFile)(opts.out, output2, "utf8");
+});
+program2.command("drift").description("Check whether Flagsmith still matches the flag files. Exit code 2 means drift.").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("-f, --format <format>", "text or markdown", "text").option("-o, --out <file>", "also write the report to this file").action(async (opts) => {
+  if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
+  const fs2 = client();
+  const project = await resolveProject(fs2, opts.project);
+  const plans = await buildPlans(fs2, project.id, opts.dir, opts.env);
+  const output2 = opts.format === "markdown" ? formatDriftMarkdown(plans) : formatDrift(plans);
+  console.log(output2);
+  if (opts.out) await (0, import_promises2.writeFile)(opts.out, output2, "utf8");
+  if (countDrift(plans) > 0) process.exitCode = 2;
 });
 program2.command("apply").description("Make Flagsmith match the YAML files (never deletes flags)").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("-y, --yes", "don't ask for confirmation (for CI)").action(async (opts) => {
   const fs2 = client();

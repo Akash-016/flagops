@@ -6,7 +6,7 @@ import { getConfig } from "./config.js";
 import { FlagsmithClient, type Project } from "./flagsmith.js";
 import { buildFlagFile, fileNameFor, toYaml } from "./flagfile.js";
 import { createInterface } from "node:readline/promises";
-import { countActions, formatPlan, formatPlanMarkdown } from "./diff.js";
+import { countActions, countDrift, formatDrift, formatDriftMarkdown, formatPlan, formatPlanMarkdown } from "./diff.js";
 import { buildPlans } from "./state.js";
 import { applyPlans } from "./apply.js";
 
@@ -89,6 +89,25 @@ program
     const output = opts.format === "markdown" ? formatPlanMarkdown(plans) : formatPlan(plans);
     console.log(output);
     if (opts.out) await writeFile(opts.out, output, "utf8");
+  });
+
+program
+  .command("drift")
+  .description("Check whether Flagsmith still matches the flag files. Exit code 2 means drift.")
+  .option("-p, --project <id-or-name>", "Flagsmith project")
+  .option("-d, --dir <dir>", "folder with the flag files", "flags")
+  .option("-e, --env <name>", "only this environment (repeat for more)", collect)
+  .option("-f, --format <format>", "text or markdown", "text")
+  .option("-o, --out <file>", "also write the report to this file")
+  .action(async (opts: { project?: string; dir: string; env?: string[]; format: string; out?: string }) => {
+    if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
+    const fs = client();
+    const project = await resolveProject(fs, opts.project);
+    const plans = await buildPlans(fs, project.id, opts.dir, opts.env);
+    const output = opts.format === "markdown" ? formatDriftMarkdown(plans) : formatDrift(plans);
+    console.log(output);
+    if (opts.out) await writeFile(opts.out, output, "utf8");
+    if (countDrift(plans) > 0) process.exitCode = 2;
   });
 
 program

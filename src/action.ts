@@ -13,7 +13,7 @@ function fail(message: string): never {
 }
 
 const command = input("COMMAND");
-if (command !== "plan" && command !== "apply") fail(`command must be plan or apply, got '${command}'`);
+if (!["plan", "apply", "drift"].includes(command)) fail(`command must be plan, apply or drift, got '${command}'`);
 if (!process.env.FLAGSMITH_ADMIN_KEY?.trim()) {
   fail("admin-key is empty. Add a repository secret FLAGSMITH_ADMIN_KEY (Settings -> Secrets and variables -> Actions).");
 }
@@ -31,17 +31,27 @@ for (const env of input("ENVIRONMENTS").split(",").map((e) => e.trim()).filter(B
 const actionRoot = process.env.GITHUB_ACTION_PATH ?? path.resolve(path.dirname(process.argv[1]), "..");
 const cli = path.join(actionRoot, "dist", "cli.cjs");
 const runnerTemp = process.env.RUNNER_TEMP ?? ".";
-const planFile = path.join(runnerTemp, "flagops-plan.md");
+const reportFile = path.join(runnerTemp, `flagops-${command}.md`);
 
-const extra = command === "plan" ? ["--format", "markdown", "--out", planFile] : ["--yes"];
+const extra = command === "apply" ? ["--yes"] : ["--format", "markdown", "--out", reportFile];
 const result = spawnSync(process.execPath, [cli, command, ...args, ...extra], { stdio: "inherit" });
-if (result.status !== 0) process.exit(result.status ?? 1);
+const status = result.status ?? 1;
+// drift exits with 2 when it finds drift: that's a result, not a failure of this step.
+if (status !== 0 && !(command === "drift" && status === 2)) process.exit(status);
 
+const output = (lines: string) => {
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, lines);
+};
+
+if (command !== "apply") {
+  const report = readFileSync(reportFile, "utf8");
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
+  output(`report-file=${reportFile}\n`);
+}
 if (command === "plan") {
-  const plan = readFileSync(planFile, "utf8");
-  const changes = /\*\*(\d+) change/.exec(plan)?.[1] ?? "0";
-  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, plan);
-  if (process.env.GITHUB_OUTPUT) {
-    appendFileSync(process.env.GITHUB_OUTPUT, `plan-file=${planFile}\nchanges=${changes}\n`);
-  }
+  output(`changes=${/\*\*(\d+) change/.exec(readFileSync(reportFile, "utf8"))?.[1] ?? "0"}\n`);
+}
+if (command === "drift") {
+  output(`drift=${status === 2}\n`);
+  if (status === 2) console.log("::warning::Flagsmith has drifted from the flag files in Git.");
 }

@@ -1,5 +1,5 @@
 name: FlagOps
-description: Manage Flagsmith flags like code. Plan flag changes on pull requests, apply them on merge.
+description: Manage Flagsmith flags like code. Plan flag changes on pull requests, apply them on merge, catch drift.
 author: Akash V
 branding:
   icon: flag
@@ -7,7 +7,7 @@ branding:
 
 inputs:
   command:
-    description: "plan or apply"
+    description: "plan, apply or drift"
     required: true
   api-url:
     description: "Flagsmith API URL, e.g. https://flagsmith.example.com/api/v1"
@@ -31,15 +31,22 @@ inputs:
     description: "For plan on a pull request: post the plan as a comment (true/false)"
     required: false
     default: "true"
+  issue:
+    description: "For drift: open an issue when drift is found, and close it once fixed (true/false)"
+    required: false
+    default: "true"
   github-token:
-    description: "Token used to post the pull request comment"
+    description: "Token used to post the pull request comment or drift issue"
     required: false
     default: ${{ github.token }}
 
 outputs:
   changes:
-    description: "Number of changes the plan contains"
+    description: "plan: number of changes the plan contains"
     value: ${{ steps.run.outputs.changes }}
+  drift:
+    description: "drift: true if Flagsmith differs from the flag files"
+    value: ${{ steps.run.outputs.drift }}
 
 runs:
   using: composite
@@ -67,7 +74,7 @@ runs:
       if: inputs.command == 'plan' && inputs.comment == 'true' && github.event_name == 'pull_request'
       uses: actions/github-script@v8
       env:
-        PLAN_FILE: ${{ steps.run.outputs.plan-file }}
+        PLAN_FILE: ${{ steps.run.outputs.report-file }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
@@ -82,4 +89,36 @@ runs:
             await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
           } else {
             await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          }
+
+    - name: Open, update or close the drift issue
+      if: inputs.command == 'drift' && inputs.issue == 'true'
+      uses: actions/github-script@v8
+      env:
+        REPORT_FILE: ${{ steps.run.outputs.report-file }}
+        DRIFT: ${{ steps.run.outputs.drift }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require("fs");
+          const body = fs.readFileSync(process.env.REPORT_FILE, "utf8");
+          const drift = process.env.DRIFT === "true";
+          const marker = "<!-- flagops-drift -->";
+          const { owner, repo } = context.repo;
+          const open = await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: "open", per_page: 100 });
+          const existing = open.find((i) => !i.pull_request && i.body && i.body.startsWith(marker));
+          const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+
+          if (drift && existing) {
+            await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
+            core.info(`Updated drift issue #${existing.number}`);
+          } else if (drift) {
+            const { data } = await github.rest.issues.create({ owner, repo, title: "Flag drift: Flagsmith no longer matches Git", body });
+            core.info(`Opened drift issue #${data.number}`);
+          } else if (existing) {
+            await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body: `Flagsmith matches Git again ([check run](${runUrl})). Closing.` });
+            await github.rest.issues.update({ owner, repo, issue_number: existing.number, state: "closed", state_reason: "completed" });
+            core.info(`Closed drift issue #${existing.number}`);
+          } else {
+            core.info("No drift and no open drift issue.");
           }
