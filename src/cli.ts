@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
 import { getConfig } from "./config.js";
-import { FlagsmithClient, type Project } from "./flagsmith.js";
+import { FlagsmithClient, type FeatureState, type Project } from "./flagsmith.js";
 import { buildFlagFile, fileNameFor, toYaml } from "./flagfile.js";
 import { createInterface } from "node:readline/promises";
 import {
@@ -16,6 +16,7 @@ import {
   formatPlanMarkdown,
 } from "./diff.js";
 import { findReferences } from "./references.js";
+import { findStaleFlags, formatStale, formatStaleMarkdown } from "./stale.js";
 import { buildPlans } from "./state.js";
 import { applyPlans } from "./apply.js";
 
@@ -129,6 +130,38 @@ program
     console.log(output);
     if (opts.out) await writeFile(opts.out, output, "utf8");
     if (countDrift(plans) > 0) process.exitCode = 2;
+  });
+
+program
+  .command("stale")
+  .description("List flags with the same setting in every environment, unchanged for N days")
+  .option("-p, --project <id-or-name>", "Flagsmith project")
+  .option("--days <n>", "how long a flag must be unchanged", "30")
+  .option("-d, --dir <dir>", "folder with the flag files (left out of the code search)", "flags")
+  .option("--code <dir>", "folder to search for code that uses the flags", ".")
+  .option("--no-code", "don't search the code")
+  .option("-f, --format <format>", "text or markdown", "text")
+  .option("-o, --out <file>", "also write the report to this file")
+  .action(async (opts: { project?: string; days: string; dir: string; code: string | false; format: string; out?: string }) => {
+    if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
+    const days = Number(opts.days);
+    if (!Number.isInteger(days) || days < 0) throw new Error("--days must be a whole number, 0 or more");
+
+    const fs = client();
+    const project = await resolveProject(fs, opts.project);
+    const [environments, features, tags] = await Promise.all([
+      fs.listEnvironments(project.id),
+      fs.listFeatures(project.id),
+      fs.listTags(project.id),
+    ]);
+    const statesByEnv = new Map<string, FeatureState[]>();
+    for (const env of environments) statesByEnv.set(env.name, await fs.listEnvironmentStates(env.api_key));
+
+    const stale = findStaleFlags(features, statesByEnv, tags, days);
+    const refs = opts.code === false ? undefined : await findReferences(opts.code, stale.map((s) => s.name), [opts.dir]);
+    const output = opts.format === "markdown" ? formatStaleMarkdown(stale, days, refs) : formatStale(stale, days, refs);
+    console.log(output);
+    if (opts.out) await writeFile(opts.out, output, "utf8");
   });
 
 program

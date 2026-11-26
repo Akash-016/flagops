@@ -18,6 +18,8 @@ export interface Feature {
   id: number;
   name: string;
   is_archived: boolean;
+  tags?: number[];
+  created_date?: string;
 }
 
 export interface FeatureState {
@@ -27,6 +29,12 @@ export interface FeatureState {
   feature_state_value: FlagValue;
   identity: number | null;
   feature_segment: number | null;
+  updated_at?: string;
+}
+
+export interface Tag {
+  id: number;
+  label: string;
 }
 
 interface Page<T> {
@@ -78,6 +86,10 @@ export class FlagsmithClient {
 
   listFeatures(projectId: number): Promise<Feature[]> {
     return this.getAll<Feature>(`/projects/${projectId}/features/`);
+  }
+
+  listTags(projectId: number): Promise<Tag[]> {
+    return this.getAll<Tag>(`/projects/${projectId}/tags/`);
   }
 
   // Only the environment-wide state of each flag: no segment or identity overrides.

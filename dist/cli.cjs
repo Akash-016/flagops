@@ -10997,6 +10997,9 @@ var FlagsmithClient = class {
   listFeatures(projectId) {
     return this.getAll(`/projects/${projectId}/features/`);
   }
+  listTags(projectId) {
+    return this.getAll(`/projects/${projectId}/tags/`);
+  }
   // Only the environment-wide state of each flag: no segment or identity overrides.
   async listEnvironmentStates(envApiKey) {
     const states = await this.getAll(`/environments/${envApiKey}/featurestates/`);
@@ -31064,6 +31067,68 @@ function formatPlan(plans, refs) {
   return lines.join("\n");
 }
 
+// src/stale.ts
+var PERMANENT_TAG = "permanent";
+var DAY_MS = 24 * 60 * 60 * 1e3;
+function findStaleFlags(features, statesByEnv, tags, days, now = /* @__PURE__ */ new Date()) {
+  const permanentIds = new Set(tags.filter((t) => t.label.toLowerCase() === PERMANENT_TAG).map((t) => t.id));
+  const stale = [];
+  for (const f of features) {
+    if (f.is_archived || (f.tags ?? []).some((t) => permanentIds.has(t))) continue;
+    const states = [...statesByEnv.values()].map((list) => list.find((s) => s.feature === f.id));
+    if (states.length === 0 || states.some((s) => s === void 0)) continue;
+    const all = states;
+    const first = all[0];
+    const same = all.every((s) => s.enabled === first.enabled && (s.feature_state_value ?? null) === (first.feature_state_value ?? null));
+    if (!same) continue;
+    const times = all.map((s) => Date.parse(s.updated_at ?? f.created_date ?? "")).filter((t) => !Number.isNaN(t));
+    if (times.length === 0) continue;
+    const lastChanged = new Date(Math.max(...times));
+    const daysUnchanged = Math.floor((now.getTime() - lastChanged.getTime()) / DAY_MS);
+    if (daysUnchanged < days) continue;
+    stale.push({ name: f.name, enabled: first.enabled, value: first.feature_state_value ?? null, lastChanged, daysUnchanged });
+  }
+  return stale.sort((a, b) => b.daysUnchanged - a.daysUnchanged || a.name.localeCompare(b.name));
+}
+var advice = (s) => s.enabled ? "on everywhere: remove the flag and keep the code path it turns on" : "off everywhere: remove the flag and the code behind it";
+var ageText = (d) => d === 0 ? "changed today" : `unchanged for ${d} day${d === 1 ? "" : "s"}`;
+function refsText(refs, max = 5) {
+  if (!refs) return "";
+  if (refs.length === 0) return "not found in code";
+  const shown = refs.slice(0, max).map((r) => `${r.file}:${r.line}`).join(", ");
+  return shown + (refs.length > max ? ` (+${refs.length - max} more)` : "");
+}
+function formatStale(stale, days, refs) {
+  if (stale.length === 0) return `No stale flags (same in every environment and unchanged for ${days}+ days).`;
+  const lines = [`${stale.length} stale flag${stale.length === 1 ? "" : "s"}:`, ""];
+  for (const s of stale) {
+    lines.push(`  ${s.name}: ${advice(s)} (${ageText(s.daysUnchanged)})`);
+    if (refs) lines.push(`    used in: ${refsText(refs.get(s.name))}`);
+  }
+  lines.push("", `Tag a flag "${PERMANENT_TAG}" in Flagsmith to leave it out (for example a kill switch).`);
+  return lines.join("\n");
+}
+function formatStaleMarkdown(stale, days, refs) {
+  const lines = ["## Stale flags", ""];
+  if (stale.length === 0) {
+    lines.push(`No stale flags (same in every environment and unchanged for ${days}+ days).`);
+    return lines.join("\n") + "\n";
+  }
+  lines.push(
+    `**${stale.length} flag${stale.length === 1 ? "" : "s"}** have had the same setting in every environment for ${days}+ days.`,
+    "",
+    `| Flag | Setting everywhere | Unchanged | What to do |${refs ? " Used in |" : ""}`,
+    `|---|---|---|---|${refs ? "---|" : ""}`
+  );
+  for (const s of stale) {
+    const setting = `${s.enabled ? "on" : "off"}${s.value === null ? "" : `, \`${JSON.stringify(s.value)}\``}`;
+    const todo = s.enabled ? "Remove flag, keep the code it turns on" : "Remove flag and the code behind it";
+    lines.push(`| \`${s.name}\` | ${setting} | ${s.daysUnchanged} days | ${todo} |${refs ? ` ${refsText(refs.get(s.name))} |` : ""}`);
+  }
+  lines.push("", `Tag a flag \`${PERMANENT_TAG}\` in Flagsmith to leave it out (for example a kill switch).`);
+  return lines.join("\n") + "\n";
+}
+
 // src/state.ts
 var import_promises2 = require("node:fs/promises");
 var import_node_path3 = __toESM(require("node:path"), 1);
@@ -31222,6 +31287,25 @@ program2.command("drift").description("Check whether Flagsmith still matches the
   console.log(output2);
   if (opts.out) await (0, import_promises3.writeFile)(opts.out, output2, "utf8");
   if (countDrift(plans) > 0) process.exitCode = 2;
+});
+program2.command("stale").description("List flags with the same setting in every environment, unchanged for N days").option("-p, --project <id-or-name>", "Flagsmith project").option("--days <n>", "how long a flag must be unchanged", "30").option("-d, --dir <dir>", "folder with the flag files (left out of the code search)", "flags").option("--code <dir>", "folder to search for code that uses the flags", ".").option("--no-code", "don't search the code").option("-f, --format <format>", "text or markdown", "text").option("-o, --out <file>", "also write the report to this file").action(async (opts) => {
+  if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
+  const days = Number(opts.days);
+  if (!Number.isInteger(days) || days < 0) throw new Error("--days must be a whole number, 0 or more");
+  const fs2 = client();
+  const project = await resolveProject(fs2, opts.project);
+  const [environments, features, tags] = await Promise.all([
+    fs2.listEnvironments(project.id),
+    fs2.listFeatures(project.id),
+    fs2.listTags(project.id)
+  ]);
+  const statesByEnv = /* @__PURE__ */ new Map();
+  for (const env of environments) statesByEnv.set(env.name, await fs2.listEnvironmentStates(env.api_key));
+  const stale = findStaleFlags(features, statesByEnv, tags, days);
+  const refs = opts.code === false ? void 0 : await findReferences(opts.code, stale.map((s) => s.name), [opts.dir]);
+  const output2 = opts.format === "markdown" ? formatStaleMarkdown(stale, days, refs) : formatStale(stale, days, refs);
+  console.log(output2);
+  if (opts.out) await (0, import_promises3.writeFile)(opts.out, output2, "utf8");
 });
 program2.command("apply").description("Make Flagsmith match the YAML files (never deletes flags)").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("-y, --yes", "don't ask for confirmation (for CI)").action(async (opts) => {
   const fs2 = client();

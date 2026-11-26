@@ -85,4 +85,17 @@ for (const [name, settings] of Object.entries(FLAGS)) {
   }
   console.log(`  ${name}`);
 }
+
+// Kill switches are off everywhere on purpose; the "permanent" tag keeps them out of `flagops stale`.
+const PERMANENT_FLAGS = ["maintenance_mode"];
+const tags = await list<{ id: number; label: string }>(`/projects/${project.id}/tags/`);
+let permanent = tags.find((t) => t.label === "permanent");
+if (!permanent) permanent = await api("POST", `/projects/${project.id}/tags/`, { label: "permanent", color: "#6837FC" });
+const allFlags = await list<{ id: number; name: string; tags: number[] }>(`/projects/${project.id}/features/?page_size=999`);
+for (const flag of allFlags.filter((f) => PERMANENT_FLAGS.includes(f.name))) {
+  if (!flag.tags.includes(permanent!.id)) {
+    await api("PATCH", `/projects/${project.id}/features/${flag.id}/`, { tags: [...flag.tags, permanent!.id] });
+  }
+}
+console.log(`Tagged as permanent: ${PERMANENT_FLAGS.join(", ")}`);
 console.log("Done. Try: flagops pull");
