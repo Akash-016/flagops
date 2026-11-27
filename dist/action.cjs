@@ -41,8 +41,16 @@ if (command === "validate") {
   const r = (0, import_node_child_process.spawnSync)(process.execPath, [cli, "validate", "--dir", input("DIR") || "flags"], { stdio: "inherit" });
   process.exit(r.status ?? 1);
 }
-if (!process.env.FLAGSMITH_ADMIN_KEY?.trim()) {
-  fail("admin-key is empty. Add a repository secret FLAGSMITH_ADMIN_KEY (Settings -> Secrets and variables -> Actions).");
+var hasEnvKeys = Boolean(process.env.FLAGSMITH_ENVIRONMENT_KEYS?.trim());
+if (command === "apply" || !hasEnvKeys) {
+  if (hasEnvKeys) delete process.env.FLAGSMITH_ENVIRONMENT_KEYS;
+  if (!process.env.FLAGSMITH_ADMIN_KEY?.trim()) {
+    fail(
+      command === "apply" ? "admin-key is empty. Add the secret FLAGSMITH_ADMIN_KEY to the job's GitHub Environment (Settings -> Environments)." : "Set environment-keys (read-only server-side keys, recommended) or admin-key."
+    );
+  }
+} else {
+  delete process.env.FLAGSMITH_ADMIN_KEY;
 }
 if (!process.env.FLAGSMITH_API_URL?.trim()) {
   fail("api-url is empty. Add a repository variable FLAGSMITH_API_URL (Settings -> Secrets and variables -> Actions -> Variables).");

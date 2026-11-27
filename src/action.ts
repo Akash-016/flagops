@@ -26,8 +26,19 @@ if (command === "validate") {
   process.exit(r.status ?? 1);
 }
 
-if (!process.env.FLAGSMITH_ADMIN_KEY?.trim()) {
-  fail("admin-key is empty. Add a repository secret FLAGSMITH_ADMIN_KEY (Settings -> Secrets and variables -> Actions).");
+// plan and drift only read, so they can use read-only environment keys. apply needs the admin key.
+const hasEnvKeys = Boolean(process.env.FLAGSMITH_ENVIRONMENT_KEYS?.trim());
+if (command === "apply" || !hasEnvKeys) {
+  if (hasEnvKeys) delete process.env.FLAGSMITH_ENVIRONMENT_KEYS; // apply always uses the admin key
+  if (!process.env.FLAGSMITH_ADMIN_KEY?.trim()) {
+    fail(
+      command === "apply"
+        ? "admin-key is empty. Add the secret FLAGSMITH_ADMIN_KEY to the job's GitHub Environment (Settings -> Environments)."
+        : "Set environment-keys (read-only server-side keys, recommended) or admin-key.",
+    );
+  }
+} else {
+  delete process.env.FLAGSMITH_ADMIN_KEY; // read-only run: don't pass the admin key on
 }
 if (!process.env.FLAGSMITH_API_URL?.trim()) {
   fail("api-url is empty. Add a repository variable FLAGSMITH_API_URL (Settings -> Secrets and variables -> Actions -> Variables).");

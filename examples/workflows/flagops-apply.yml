@@ -2,12 +2,15 @@
 # On merge to main: applies non-production flags right away, then waits for a
 # reviewer to approve before applying production.
 #
-# Setup: Settings -> Environments -> New environment "production"
-#        -> Required reviewers -> add who may approve production flag changes.
-# See "Security model" in the FlagOps README for what else to protect.
+# Only apply gets the admin key, and only through GitHub Environments limited to main,
+# so no pull request workflow can read it. Setup (Settings -> Environments):
+#   - "non-production": Deployment branches -> Selected branches -> main.
+#     Environment secret FLAGSMITH_ADMIN_KEY.
+#   - "production": the same, plus Required reviewers (who may approve production changes).
+# Don't keep FLAGSMITH_ADMIN_KEY as a repository secret. See "Security model" in the README.
 #
 # If Flagsmith is only reachable on a private network, use a self-hosted runner
-# instead of ubuntu-latest (private repos only).
+# instead of ubuntu-latest (see "Security model").
 
 name: FlagOps apply
 
@@ -27,6 +30,7 @@ concurrency:
 jobs:
   apply-non-production:
     runs-on: ubuntu-latest
+    environment: non-production
     steps:
       - uses: actions/checkout@v5
       - uses: Akash-016/flagops@v1

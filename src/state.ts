@@ -3,7 +3,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseFlagFile, type FlagFile } from "./flagfile.js";
-import type { Environment, Feature, FlagsmithClient } from "./flagsmith.js";
+import { readEnvironmentDocument, type Environment, type EnvironmentDocument, type Feature, type FlagsmithClient } from "./flagsmith.js";
 import { diffEnvironment, sortByEnvironment, type EnvironmentPlan, type LiveFlags } from "./diff.js";
 import { checkSameFlags, type NamedFlagFile } from "./validate.js";
 
@@ -41,33 +41,64 @@ async function readNamedFlagFiles(dir: string): Promise<NamedFlagFile[]> {
   return files;
 }
 
-export async function readLiveFlags(fs: FlagsmithClient, env: Environment, features: Feature[]): Promise<LiveFlags> {
-  const nameById = new Map(features.filter((f) => !f.is_archived).map((f) => [f.id, f.name]));
+// Where live flags come from: the Admin API (admin key), or environment documents
+// (read-only server-side keys, one per environment).
+export interface LiveSource {
+  listEnvironments(): Promise<Environment[]>;
+  readLive(env: Environment): Promise<LiveFlags>;
+  // Ends the error when a flag file names an environment this source doesn't have.
+  missing: string;
+}
+
+export function adminSource(fs: FlagsmithClient, projectId: number): LiveSource {
+  let features: Promise<Feature[]> | undefined;
+  return {
+    listEnvironments: () => fs.listEnvironments(projectId),
+    async readLive(env) {
+      features ??= fs.listFeatures(projectId);
+      const nameById = new Map((await features).filter((f) => !f.is_archived).map((f) => [f.id, f.name]));
+      const live: LiveFlags = new Map();
+      for (const s of await fs.listEnvironmentStates(env.api_key)) {
+        const name = nameById.get(s.feature);
+        if (name) live.set(name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.id });
+      }
+      return live;
+    },
+    missing: "Flagsmith only has",
+  };
+}
+
+export function liveFromDocument(doc: EnvironmentDocument): LiveFlags {
   const live: LiveFlags = new Map();
-  for (const s of await fs.listEnvironmentStates(env.api_key)) {
-    const name = nameById.get(s.feature);
-    if (name) live.set(name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.id });
+  for (const s of doc.feature_states) {
+    if (s.feature_segment) continue; // segment override, not the environment default
+    live.set(s.feature.name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.django_id });
   }
   return live;
+}
+
+export async function keySource(apiUrl: string, keys: string[]): Promise<LiveSource> {
+  const docs = await Promise.all(keys.map((k) => readEnvironmentDocument(apiUrl, k)));
+  const projects = new Set(docs.map((d) => d.project.id));
+  if (projects.size > 1) {
+    throw new Error(`The environment keys belong to different projects: ${[...new Set(docs.map((d) => d.project.name))].join(", ")}`);
+  }
+  const envs = docs.map((d) => ({ id: d.id, name: d.name, api_key: d.api_key, project: d.project.id }));
+  return {
+    listEnvironments: async () => envs,
+    readLive: async (env) => liveFromDocument(docs.find((d) => d.id === env.id)!),
+    missing: "the environment keys only cover",
+  };
 }
 
 export interface PlannedEnvironment extends EnvironmentPlan {
   env: Environment;
 }
 
-// Build the plan for every YAML file. Fails if a file names an environment Flagsmith doesn't have.
+// Build the plan for every YAML file. Fails if a file names an environment the source doesn't have.
 // onlyEnvs: if given, only these environments (by name, any case) are planned.
-export async function buildPlans(
-  fs: FlagsmithClient,
-  projectId: number,
-  dir: string,
-  onlyEnvs?: string[],
-): Promise<PlannedEnvironment[]> {
-  const [allFiles, environments, features] = await Promise.all([
-    readFlagFiles(dir),
-    fs.listEnvironments(projectId),
-    fs.listFeatures(projectId),
-  ]);
+export async function buildPlans(source: LiveSource, dir: string, onlyEnvs?: string[]): Promise<PlannedEnvironment[]> {
+  const [allFiles, environments] = await Promise.all([readFlagFiles(dir), source.listEnvironments()]);
 
   let files = allFiles;
   if (onlyEnvs && onlyEnvs.length > 0) {
@@ -82,10 +113,10 @@ export async function buildPlans(
     const env = environments.find((e) => e.name.toLowerCase() === file.environment.toLowerCase());
     if (!env) {
       throw new Error(
-        `YAML names environment "${file.environment}", but Flagsmith only has: ${environments.map((e) => e.name).join(", ")}`,
+        `YAML names environment "${file.environment}", but ${source.missing}: ${environments.map((e) => e.name).join(", ")}`,
       );
     }
-    const live = await readLiveFlags(fs, env, features);
+    const live = await source.readLive(env);
     plans.push({ ...diffEnvironment(file, live), env });
   }
   return sortByEnvironment(plans);

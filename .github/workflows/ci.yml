@@ -117,6 +117,23 @@ jobs:
           echo "--- apply puts it back"
           $cli apply --yes
           expect_exit 0 $cli drift
+
+          echo "--- read-only server-side keys: plan and drift work without the admin key"
+          keys=""
+          for k in $(curl -sf -H "$auth" "$FLAGSMITH_API_URL/environments/?project=$FLAGSMITH_PROJECT" | jq -r '(.results? // .) | .[].api_key'); do
+            keys="$keys $(curl -sf -X POST -H "$auth" -H "Content-Type: application/json" \
+              -d '{"name": "ci"}' "$FLAGSMITH_API_URL/environments/$k/api-keys/" | jq -r .key)"
+          done
+          readonly_cli="env FLAGSMITH_ADMIN_KEY=wrong-on-purpose FLAGSMITH_ENVIRONMENT_KEYS=$(echo $keys | tr ' ' ',') $cli"
+          expect_exit 0 $readonly_cli drift
+          $readonly_cli plan --no-code
+          curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json" \
+            -d '{"enabled": false}' "$FLAGSMITH_API_URL/environments/$env_key/featurestates/$state/" > /dev/null
+          expect_exit 2 $readonly_cli drift
+          echo "--- read-only keys can't apply"
+          expect_exit 1 env FLAGSMITH_ADMIN_KEY=wrong-on-purpose $cli apply --yes
+          $cli apply --yes
+          expect_exit 0 $readonly_cli drift
           echo "All round-trip checks passed."
 
       - name: Flagsmith logs on failure

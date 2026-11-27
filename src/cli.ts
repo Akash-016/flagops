@@ -2,7 +2,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
-import { getConfig } from "./config.js";
+import { getApiUrl, getConfig, getEnvironmentKeys } from "./config.js";
 import { FlagsmithClient, type FeatureState, type Project } from "./flagsmith.js";
 import { buildFlagFile, fileNameFor, toYaml } from "./flagfile.js";
 import { createInterface } from "node:readline/promises";
@@ -17,7 +17,7 @@ import {
 } from "./diff.js";
 import { findReferences } from "./references.js";
 import { findStaleFlags, formatStale, formatStaleMarkdown } from "./stale.js";
-import { buildPlans, readFlagFiles } from "./state.js";
+import { adminSource, buildPlans, keySource, readFlagFiles, type LiveSource } from "./state.js";
 import { applyPlans } from "./apply.js";
 
 const program = new Command();
@@ -83,6 +83,15 @@ program
 
 const collect = (value: string, previous: string[] = []) => [...previous, value];
 
+// plan and drift only read flags: with FLAGSMITH_ENVIRONMENT_KEYS set they use those read-only
+// server-side keys and never touch the admin key. Everything else needs the admin key.
+async function readSource(project?: string): Promise<LiveSource> {
+  const keys = getEnvironmentKeys();
+  if (keys.length > 0) return keySource(getApiUrl(), keys);
+  const fs = client();
+  return adminSource(fs, (await resolveProject(fs, project)).id);
+}
+
 program
   .command("validate")
   .description("Check the flag files without connecting to Flagsmith (no API key needed)")
@@ -114,9 +123,7 @@ program
   .option("--no-code", "don't search the code")
   .action(async (opts: PlanOptions) => {
     if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
-    const fs = client();
-    const project = await resolveProject(fs, opts.project);
-    const plans = await buildPlans(fs, project.id, opts.dir, opts.env);
+    const plans = await buildPlans(await readSource(opts.project), opts.dir, opts.env);
     const refs = opts.code === false ? undefined : await findReferences(opts.code, changedFlags(plans), [opts.dir]);
     const output = opts.format === "markdown" ? formatPlanMarkdown(plans, refs) : formatPlan(plans, refs);
     console.log(output);
@@ -133,9 +140,7 @@ program
   .option("-o, --out <file>", "also write the report to this file")
   .action(async (opts: { project?: string; dir: string; env?: string[]; format: string; out?: string }) => {
     if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
-    const fs = client();
-    const project = await resolveProject(fs, opts.project);
-    const plans = await buildPlans(fs, project.id, opts.dir, opts.env);
+    const plans = await buildPlans(await readSource(opts.project), opts.dir, opts.env);
     const output = opts.format === "markdown" ? formatDriftMarkdown(plans) : formatDrift(plans);
     console.log(output);
     if (opts.out) await writeFile(opts.out, output, "utf8");
@@ -184,7 +189,7 @@ program
   .action(async (opts: { project?: string; dir: string; env?: string[]; yes?: boolean }) => {
     const fs = client();
     const project = await resolveProject(fs, opts.project);
-    const plans = await buildPlans(fs, project.id, opts.dir, opts.env);
+    const plans = await buildPlans(adminSource(fs, project.id), opts.dir, opts.env);
     console.log(formatPlan(plans));
     if (countActions(plans) === 0) return;
 

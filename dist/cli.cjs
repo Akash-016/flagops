@@ -10944,18 +10944,33 @@ var program = new Command();
 // src/config.ts
 var import_dotenv = __toESM(require_dist(), 1);
 (0, import_dotenv.config)({ path: [".env", "../.env"], quiet: true });
+function getApiUrl() {
+  return (process.env.FLAGSMITH_API_URL || "http://localhost:8000/api/v1").replace(/\/+$/, "");
+}
 function getConfig() {
-  const apiUrl = process.env.FLAGSMITH_API_URL ?? "http://localhost:8000/api/v1";
   const adminKey = process.env.FLAGSMITH_ADMIN_KEY;
   if (!adminKey) {
     throw new Error(
       "FLAGSMITH_ADMIN_KEY is not set. Put it in a .env file or your environment."
     );
   }
-  return { apiUrl: apiUrl.replace(/\/+$/, ""), adminKey };
+  return { apiUrl: getApiUrl(), adminKey };
+}
+function getEnvironmentKeys() {
+  return (process.env.FLAGSMITH_ENVIRONMENT_KEYS ?? "").split(/[\s,]+/).filter(Boolean);
 }
 
 // src/flagsmith.ts
+async function readEnvironmentDocument(apiUrl, serverKey) {
+  const res = await fetch(`${apiUrl}/environment-document/`, { headers: { "X-Environment-Key": serverKey } });
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(
+      `Flagsmith rejected an environment key starting "${serverKey.slice(0, 8)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`
+    );
+  }
+  if (!res.ok) throw new Error(`Flagsmith GET ${apiUrl}/environment-document/ failed: ${res.status} ${await res.text()}`);
+  return await res.json();
+}
 var FlagsmithClient = class {
   constructor(apiUrl, adminKey) {
     this.apiUrl = apiUrl;
@@ -31180,21 +31195,46 @@ async function readNamedFlagFiles(dir) {
   }
   return files;
 }
-async function readLiveFlags(fs2, env, features) {
-  const nameById = new Map(features.filter((f) => !f.is_archived).map((f) => [f.id, f.name]));
+function adminSource(fs2, projectId) {
+  let features;
+  return {
+    listEnvironments: () => fs2.listEnvironments(projectId),
+    async readLive(env) {
+      features ??= fs2.listFeatures(projectId);
+      const nameById = new Map((await features).filter((f) => !f.is_archived).map((f) => [f.id, f.name]));
+      const live = /* @__PURE__ */ new Map();
+      for (const s of await fs2.listEnvironmentStates(env.api_key)) {
+        const name = nameById.get(s.feature);
+        if (name) live.set(name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.id });
+      }
+      return live;
+    },
+    missing: "Flagsmith only has"
+  };
+}
+function liveFromDocument(doc) {
   const live = /* @__PURE__ */ new Map();
-  for (const s of await fs2.listEnvironmentStates(env.api_key)) {
-    const name = nameById.get(s.feature);
-    if (name) live.set(name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.id });
+  for (const s of doc.feature_states) {
+    if (s.feature_segment) continue;
+    live.set(s.feature.name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.django_id });
   }
   return live;
 }
-async function buildPlans(fs2, projectId, dir, onlyEnvs) {
-  const [allFiles, environments, features] = await Promise.all([
-    readFlagFiles(dir),
-    fs2.listEnvironments(projectId),
-    fs2.listFeatures(projectId)
-  ]);
+async function keySource(apiUrl, keys) {
+  const docs = await Promise.all(keys.map((k) => readEnvironmentDocument(apiUrl, k)));
+  const projects = new Set(docs.map((d) => d.project.id));
+  if (projects.size > 1) {
+    throw new Error(`The environment keys belong to different projects: ${[...new Set(docs.map((d) => d.project.name))].join(", ")}`);
+  }
+  const envs = docs.map((d) => ({ id: d.id, name: d.name, api_key: d.api_key, project: d.project.id }));
+  return {
+    listEnvironments: async () => envs,
+    readLive: async (env) => liveFromDocument(docs.find((d) => d.id === env.id)),
+    missing: "the environment keys only cover"
+  };
+}
+async function buildPlans(source, dir, onlyEnvs) {
+  const [allFiles, environments] = await Promise.all([readFlagFiles(dir), source.listEnvironments()]);
   let files = allFiles;
   if (onlyEnvs && onlyEnvs.length > 0) {
     const wanted = onlyEnvs.map((e) => e.toLowerCase());
@@ -31207,10 +31247,10 @@ async function buildPlans(fs2, projectId, dir, onlyEnvs) {
     const env = environments.find((e) => e.name.toLowerCase() === file2.environment.toLowerCase());
     if (!env) {
       throw new Error(
-        `YAML names environment "${file2.environment}", but Flagsmith only has: ${environments.map((e) => e.name).join(", ")}`
+        `YAML names environment "${file2.environment}", but ${source.missing}: ${environments.map((e) => e.name).join(", ")}`
       );
     }
-    const live = await readLiveFlags(fs2, env, features);
+    const live = await source.readLive(env);
     plans.push({ ...diffEnvironment(file2, live), env });
   }
   return sortByEnvironment(plans);
@@ -31295,6 +31335,12 @@ program2.command("pull").description("Export each environment's flags to <dir>/<
   }
 });
 var collect = (value, previous = []) => [...previous, value];
+async function readSource(project) {
+  const keys = getEnvironmentKeys();
+  if (keys.length > 0) return keySource(getApiUrl(), keys);
+  const fs2 = client();
+  return adminSource(fs2, (await resolveProject(fs2, project)).id);
+}
 program2.command("validate").description("Check the flag files without connecting to Flagsmith (no API key needed)").option("-d, --dir <dir>", "folder with the flag files", "flags").action(async (opts) => {
   const files = await readFlagFiles(opts.dir);
   const flags = new Set(files.flatMap((f) => Object.keys(f.flags))).size;
@@ -31302,9 +31348,7 @@ program2.command("validate").description("Check the flag files without connectin
 });
 program2.command("plan").description("Show what apply would change, without changing anything").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("-f, --format <format>", "text or markdown", "text").option("-o, --out <file>", "also write the plan to this file").option("--code <dir>", "folder to search for code that uses changed flags", ".").option("--no-code", "don't search the code").action(async (opts) => {
   if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
-  const fs2 = client();
-  const project = await resolveProject(fs2, opts.project);
-  const plans = await buildPlans(fs2, project.id, opts.dir, opts.env);
+  const plans = await buildPlans(await readSource(opts.project), opts.dir, opts.env);
   const refs = opts.code === false ? void 0 : await findReferences(opts.code, changedFlags(plans), [opts.dir]);
   const output2 = opts.format === "markdown" ? formatPlanMarkdown(plans, refs) : formatPlan(plans, refs);
   console.log(output2);
@@ -31312,9 +31356,7 @@ program2.command("plan").description("Show what apply would change, without chan
 });
 program2.command("drift").description("Check whether Flagsmith still matches the flag files. Exit code 2 means drift.").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("-f, --format <format>", "text or markdown", "text").option("-o, --out <file>", "also write the report to this file").action(async (opts) => {
   if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
-  const fs2 = client();
-  const project = await resolveProject(fs2, opts.project);
-  const plans = await buildPlans(fs2, project.id, opts.dir, opts.env);
+  const plans = await buildPlans(await readSource(opts.project), opts.dir, opts.env);
   const output2 = opts.format === "markdown" ? formatDriftMarkdown(plans) : formatDrift(plans);
   console.log(output2);
   if (opts.out) await (0, import_promises3.writeFile)(opts.out, output2, "utf8");
@@ -31342,7 +31384,7 @@ program2.command("stale").description("List flags with the same setting in every
 program2.command("apply").description("Make Flagsmith match the YAML files (never deletes flags)").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("-y, --yes", "don't ask for confirmation (for CI)").action(async (opts) => {
   const fs2 = client();
   const project = await resolveProject(fs2, opts.project);
-  const plans = await buildPlans(fs2, project.id, opts.dir, opts.env);
+  const plans = await buildPlans(adminSource(fs2, project.id), opts.dir, opts.env);
   console.log(formatPlan(plans));
   if (countActions(plans) === 0) return;
   if (!opts.yes) {

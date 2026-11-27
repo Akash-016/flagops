@@ -2,8 +2,11 @@
 # Checks once a day whether someone changed flags outside Git (for example in the
 # Flagsmith dashboard). Opens an issue listing the drift, and closes it once fixed.
 #
+# drift only reads flags, so it uses the read-only FLAGSMITH_ENVIRONMENT_KEYS secret
+# (see flagops-plan.yml), never the admin key.
+#
 # If Flagsmith is only reachable on a private network, use a self-hosted runner
-# instead of ubuntu-latest (private repos only).
+# instead of ubuntu-latest (see "Security model").
 
 name: FlagOps drift check
 
@@ -25,4 +28,4 @@ jobs:
         with:
           command: drift
           api-url: ${{ vars.FLAGSMITH_API_URL }}
-          admin-key: ${{ secrets.FLAGSMITH_ADMIN_KEY }}
+          environment-keys: ${{ secrets.FLAGSMITH_ENVIRONMENT_KEYS }}

@@ -71,19 +71,21 @@ npx github:Akash-016/flagops apply    # make the change (asks first)
 **5. Add the GitHub Action** to the repo that holds your `flags/` folder
 
 1. Copy the four files from [`examples/workflows/`](examples/workflows) to `.github/workflows/`.
-2. Settings → Secrets and variables → Actions: add the secret `FLAGSMITH_ADMIN_KEY` and the variable `FLAGSMITH_API_URL`.
-3. Settings → Environments → New environment `production` → Required reviewers → add who may approve production flag changes.
-4. Make `validate` a required status check on `main`, so broken flag files can't be merged.
-5. Read the [security model](#security-model) and protect `.github/workflows/`.
+2. In Flagsmith, create a server-side key for each environment (Environment settings → SDK Keys → Server-side). These can read flags but not change them.
+3. Settings → Secrets and variables → Actions: add the variable `FLAGSMITH_API_URL` and the secret `FLAGSMITH_ENVIRONMENT_KEYS` (the server-side keys, separated by spaces). `plan` and `drift` use these.
+4. Settings → Environments: create `non-production` and `production`. For both, set Deployment branches to `main` only and add the environment secret `FLAGSMITH_ADMIN_KEY`. For `production`, also add Required reviewers. Only `apply` uses the admin key.
+5. Make `validate` a required status check on `main`, so broken flag files can't be merged.
+6. Read the [security model](#security-model).
 
 The examples use GitHub's `ubuntu-latest` runners, which need Flagsmith on an address they can reach. If Flagsmith runs on a private network, use a [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners) in a private repo. The [demo repo](https://github.com/Akash-016/flagops-demo) does this, with Flagsmith on the maintainer's machine.
 
 ## How FlagOps uses Flagsmith
 
-FlagOps talks to the **Flagsmith Admin API** of a self-hosted instance, authenticated with an organisation API key (`Authorization: Api-Key ...`).
+FlagOps talks to the **Flagsmith Admin API** of a self-hosted instance, authenticated with an organisation API key (`Authorization: Api-Key ...`). In CI, `plan` and `drift` instead read each environment with a read-only server-side key (`X-Environment-Key: ser...`).
 
 | Endpoint | Used by | For |
 |---|---|---|
+| `GET /environment-document/` | plan, drift (read-only keys) | One environment's name and every flag's on/off and value |
 | `GET /projects/` | all | Find the project |
 | `GET /environments/?project=<id>` | all | List environments and their keys |
 | `GET /projects/<id>/features/` | all | Flag names, tags, archived state |
@@ -105,6 +107,8 @@ Segment overrides and per-user (identity) overrides are left alone: FlagOps read
 | `flagops apply` | Make Flagsmith match the YAML. Asks first; `--yes` skips the question (CI) |
 | `flagops drift` | Report differences between Flagsmith and YAML. Exit code 2 means drift |
 | `flagops stale` | List flags with the same setting everywhere, unchanged for `--days` (default 30) |
+
+`plan` and `drift` use read-only keys when `FLAGSMITH_ENVIRONMENT_KEYS` is set (server-side keys separated by spaces), and the admin key otherwise.
 
 Common options:
 
@@ -140,31 +144,40 @@ flags:
   with:
     command: plan            # validate, plan, apply or drift
     api-url: ${{ vars.FLAGSMITH_API_URL }}
-    admin-key: ${{ secrets.FLAGSMITH_ADMIN_KEY }}
+    environment-keys: ${{ secrets.FLAGSMITH_ENVIRONMENT_KEYS }}   # plan, drift
+    # admin-key: ${{ secrets.FLAGSMITH_ADMIN_KEY }}               # apply, from a GitHub Environment
     # environments: Production      # optional, comma-separated
-    # project: My Project           # optional
 ```
 
-| Command | Result |
-|---|---|
-| `validate` | Checks the files offline. Needs no `api-url` or `admin-key` |
-| `plan` | Posts (and keeps updating) one plan comment on the pull request |
-| `apply` | Applies the YAML. Put production in a job with `environment: production` for approval |
-| `drift` | Opens an issue on drift and closes it when Flagsmith matches Git again |
+| Command | Key | Result |
+|---|---|---|
+| `validate` | none | Checks the files offline |
+| `plan` | `environment-keys` | Posts (and keeps updating) one plan comment on the pull request |
+| `apply` | `admin-key` | Applies the YAML. Put production in a job with `environment: production` for approval |
+| `drift` | `environment-keys` | Opens an issue on drift and closes it when Flagsmith matches Git again |
 
-The Action is a prebuilt bundle (`dist/`), so it installs nothing and runs in seconds on Linux, macOS and Windows runners.
+`plan` and `drift` also accept `admin-key` if you don't set `environment-keys`, but then a pull request workflow holds the admin key.
+
+The Action is a prebuilt bundle (`dist/`), so it installs nothing and runs in seconds. Tested on Linux and Windows runners.
 
 ## Security model
 
-FlagOps makes Git the record of every flag change, and makes production changes wait for a reviewer. Know where that protection ends:
+FlagOps makes Git the record of every flag change, and makes production changes wait for a reviewer. Here is what holds that in place, and where it ends.
 
-- **The admin key can change any environment.** Flagsmith organisation API keys can't be limited to one environment, so the same key serves plan, apply and drift.
-- **Anyone with write access to the repo can bypass the approval.** Pull request workflows from branches in the same repo can read repository secrets. A writer could edit the plan workflow inside a pull request to run `apply` on production. Close this gap:
-  - Add a `CODEOWNERS` entry for `.github/workflows/` and turn on branch protection for `main` with "Require review from Code Owners", so workflow changes need a second person.
-  - Give write access only to people you'd trust with the Flagsmith dashboard anyway.
-- **Fork pull requests are safe.** GitHub gives them no secrets. The examples run only `validate` for forks and skip `plan`.
+**Pull requests never see the admin key.** A pull request runs its workflow files from its own branch, so anyone with write access can edit a workflow in a pull request and it runs before review. CODEOWNERS and branch protection only block the merge, not that run. So with the recommended setup, pull request workflows hold nothing that can change flags:
+
+- `plan` and `drift` read flags with server-side environment keys. Flagsmith's Admin API rejects these keys, so they can't change anything.
+- The admin key is only an environment secret of the `non-production` and `production` GitHub Environments. Both accept deployments from `main` only, so a job started from a pull request or another branch can't get it. Don't also store it as a repository secret.
+- To change flags, a change must reach `main`, through a pull request if branch protection requires one. Production also waits for a required reviewer.
+
+**What a writer can still do:** read flag settings with the read-only keys (flag settings, not user data), and push to `main` if branch protection allows it. Use branch protection or a ruleset on `main`, and limit who can bypass it.
+
+**Other points:**
+
+- **Fork pull requests get no secrets.** The examples run only `validate` for forks and skip `plan`.
 - **Drift is the backstop.** Any change that reaches Flagsmith outside a reviewed merge, from the dashboard or from a misused key, shows up in the next drift check as an issue.
-- **Self-hosted runners only on private repos.** On a public repo, a pull request could run code on the runner's machine.
+- **Self-hosted runners belong on private repos.** On a public repo, a fork pull request can add a workflow that runs on the runner's machine. If you must (the [demo](https://github.com/Akash-016/flagops-demo) does, to reach a laptop), require approval for workflows from all outside contributors.
+- **`stale` needs the admin key**, because only the Admin API reports when each flag last changed. Run it locally, not from pull requests.
 
 ## Limits
 

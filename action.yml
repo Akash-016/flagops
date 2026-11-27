@@ -14,11 +14,15 @@ inputs:
     required: false
     default: ""
   admin-key:
-    description: "Flagsmith Admin API key, stored as a secret (not needed for validate)"
+    description: "Flagsmith Admin API key, needed for apply. Store it in a GitHub Environment secret limited to main"
+    required: false
+    default: ""
+  environment-keys:
+    description: "Read-only server-side environment keys (ser...), one per environment, separated by spaces or new lines. Used by plan and drift instead of admin-key"
     required: false
     default: ""
   project:
-    description: "Flagsmith project id or name (only needed if there are several)"
+    description: "Flagsmith project id or name (only needed if there are several; ignored with environment-keys)"
     required: false
     default: ""
   dir:
@@ -65,6 +69,7 @@ runs:
       env:
         FLAGSMITH_API_URL: ${{ inputs.api-url }}
         FLAGSMITH_ADMIN_KEY: ${{ inputs.admin-key }}
+        FLAGSMITH_ENVIRONMENT_KEYS: ${{ inputs.environment-keys }}
         INPUT_COMMAND: ${{ inputs.command }}
         INPUT_PROJECT: ${{ inputs.project }}
         INPUT_DIR: ${{ inputs.dir }}

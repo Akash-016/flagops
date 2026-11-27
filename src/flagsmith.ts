@@ -37,6 +37,33 @@ export interface Tag {
   label: string;
 }
 
+// What a server-side environment key (ser....) can read: one environment's flags.
+// Read-only: the Admin API rejects these keys, so plan and drift can run without the admin key.
+export interface EnvironmentDocument {
+  id: number;
+  name: string;
+  api_key: string;
+  project: { id: number; name: string };
+  feature_states: {
+    django_id: number;
+    feature: { id: number; name: string };
+    enabled: boolean;
+    feature_state_value: FlagValue;
+    feature_segment: unknown;
+  }[];
+}
+
+export async function readEnvironmentDocument(apiUrl: string, serverKey: string): Promise<EnvironmentDocument> {
+  const res = await fetch(`${apiUrl}/environment-document/`, { headers: { "X-Environment-Key": serverKey } });
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(
+      `Flagsmith rejected an environment key starting "${serverKey.slice(0, 8)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`,
+    );
+  }
+  if (!res.ok) throw new Error(`Flagsmith GET ${apiUrl}/environment-document/ failed: ${res.status} ${await res.text()}`);
+  return (await res.json()) as EnvironmentDocument;
+}
+
 interface Page<T> {
   next: string | null;
   results: T[];

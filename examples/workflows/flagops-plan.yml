@@ -3,9 +3,12 @@
 # Skipped on fork pull requests (they get no secrets). flagops-validate.yml checks
 # the files themselves.
 #
+# plan only reads flags, so it uses read-only server-side environment keys, never the
+# admin key. Secret FLAGSMITH_ENVIRONMENT_KEYS: one key per environment (Flagsmith:
+# Environment settings -> SDK Keys -> Server-side), separated by spaces or new lines.
+#
 # The plan job must reach your Flagsmith. If Flagsmith is only on a private network or your
-# own machine, use a self-hosted runner instead of ubuntu-latest (on a private repo only:
-# GitHub advises against self-hosted runners for public repos).
+# own machine, use a self-hosted runner instead of ubuntu-latest (see "Security model").
 
 name: FlagOps plan
 
@@ -28,4 +31,4 @@ jobs:
         with:
           command: plan
           api-url: ${{ vars.FLAGSMITH_API_URL }}
-          admin-key: ${{ secrets.FLAGSMITH_ADMIN_KEY }}
+          environment-keys: ${{ secrets.FLAGSMITH_ENVIRONMENT_KEYS }}
