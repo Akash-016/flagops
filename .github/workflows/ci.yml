@@ -130,8 +130,12 @@ jobs:
           curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json" \
             -d '{"enabled": false}' "$FLAGSMITH_API_URL/environments/$env_key/featurestates/$state/" > /dev/null
           expect_exit 2 $readonly_cli drift
-          echo "--- read-only keys can't apply"
-          expect_exit 1 env FLAGSMITH_ADMIN_KEY=wrong-on-purpose $cli apply --yes
+          echo "--- read-only keys can't use the Admin API, so they can't apply"
+          server_key=$(echo $keys | awk '{print $1}')
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Api-Key $server_key" "$FLAGSMITH_API_URL/projects/")
+          echo "Admin API with a server-side key: HTTP $code"
+          if [ "$code" != 401 ] && [ "$code" != 403 ]; then echo "::error::Admin API accepted a server-side key"; exit 1; fi
+          expect_exit 1 env FLAGSMITH_ADMIN_KEY=$server_key FLAGSMITH_ENVIRONMENT_KEYS= $cli apply --yes
           $cli apply --yes
           expect_exit 0 $readonly_cli drift
           echo "All round-trip checks passed."

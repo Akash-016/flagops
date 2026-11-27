@@ -179,7 +179,7 @@ FlagOps makes Git the record of every flag change, and makes production changes 
 - The admin key is only an environment secret of the `non-production` and `production` GitHub Environments. Both accept deployments from `main` only, so a job started from a pull request or another branch can't get it. Don't also store it as a repository secret.
 - To change flags, a change must reach `main`, through a pull request if branch protection requires one. Production also waits for a required reviewer.
 
-**What a writer can still do:** read flag settings with the read-only keys (flag settings, not user data), and push to `main` if branch protection allows it. Use branch protection or a ruleset on `main`, and limit who can bypass it.
+**What a writer can still do:** read what the read-only keys can see: flag settings, segment rules and identity overrides (check whether yours hold user identifiers such as emails), and push to `main` if branch protection allows it. Use branch protection or a ruleset on `main`, and limit who can bypass it.
 
 **Other points:**
 
