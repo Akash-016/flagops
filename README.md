@@ -18,8 +18,9 @@ Your flags live in YAML files in a Git repo, one file per environment. FlagOps k
 |---|---|
 | **Plan on every pull request** | A bot comments with a table of what will change, in which environment, and where in your code each changed flag is used. |
 | **Apply on merge** | Development and Staging update right away. Production waits until a named reviewer approves. |
-| **Catch drift** | An hourly check opens an issue when Flagsmith no longer matches Git (someone used the dashboard), and closes it once fixed. |
+| **Catch drift** | A scheduled check opens an issue when Flagsmith no longer matches Git (someone used the dashboard), and closes it once fixed. |
 | **Find stale flags** | Lists flags with the same setting in every environment for 30+ days, with the code to clean up. |
+| **Validate offline** | Checks the files without an API key, so it runs safely on every pull request, forks included. |
 | **Never deletes** | Flags missing from YAML are reported, not removed. |
 
 It ships as a CLI, a GitHub Action, and a one-command Docker setup.
@@ -70,9 +71,9 @@ npx github:Akash-016/flagops apply    # make the change (asks first)
 1. Copy the three files from [`examples/workflows/`](examples/workflows) to `.github/workflows/`.
 2. Settings → Secrets and variables → Actions: add the secret `FLAGSMITH_ADMIN_KEY` and the variable `FLAGSMITH_API_URL`.
 3. Settings → Environments → New environment `production` → Required reviewers → add who may approve production flag changes.
-4. The runner must be able to reach your Flagsmith. If Flagsmith runs on your own machine or private network, use a [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners).
+4. Read the [security model](#security-model) and protect `.github/workflows/`.
 
-A working example lives in [Akash-016/flagops-demo](https://github.com/Akash-016/flagops-demo).
+The examples use GitHub's `ubuntu-latest` runners, which need Flagsmith on an address they can reach. If Flagsmith runs on a private network, use a [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners) in a private repo. The [demo repo](https://github.com/Akash-016/flagops-demo) does this, with Flagsmith on the maintainer's machine.
 
 ## How FlagOps uses Flagsmith
 
@@ -94,6 +95,7 @@ Segment overrides and per-user (identity) overrides are left alone: FlagOps read
 
 | Command | What it does |
 |---|---|
+| `flagops validate` | Check the flag files without connecting to Flagsmith: schema, one file per environment, same flags in every file |
 | `flagops check` | Test the connection and list projects |
 | `flagops pull` | Write each environment's flags to `flags/<environment>.yaml` |
 | `flagops plan` | Show what `apply` would change and where the changed flags are used in code |
@@ -126,12 +128,14 @@ flags:
 
 `value` can be text, a number, `true`/`false`, or `null`. A typo stops every command with the exact place, for example `flags.max_cart_items.enabled: expected boolean, received string`.
 
+**Every file must list the same flags.** A Flagsmith flag always exists in every environment, so a new flag goes into each file (with `enabled: false` where it should stay off). If it's missing from one, every command stops and says which file to fix.
+
 ## GitHub Action
 
 ```yaml
-- uses: Akash-016/flagops@main
+- uses: Akash-016/flagops@v1
   with:
-    command: plan            # plan, apply or drift
+    command: plan            # validate, plan, apply or drift
     api-url: ${{ vars.FLAGSMITH_API_URL }}
     admin-key: ${{ secrets.FLAGSMITH_ADMIN_KEY }}
     # environments: Production      # optional, comma-separated
@@ -140,17 +144,30 @@ flags:
 
 | Command | Result |
 |---|---|
+| `validate` | Checks the files offline. Needs no `api-url` or `admin-key` |
 | `plan` | Posts (and keeps updating) one plan comment on the pull request |
 | `apply` | Applies the YAML. Put production in a job with `environment: production` for approval |
 | `drift` | Opens an issue on drift and closes it when Flagsmith matches Git again |
 
 The Action is a prebuilt bundle (`dist/`), so it installs nothing and runs in seconds on Linux, macOS and Windows runners.
 
+## Security model
+
+FlagOps makes Git the record of every flag change, and makes production changes wait for a reviewer. Know where that protection ends:
+
+- **The admin key can change any environment.** Flagsmith organisation API keys can't be limited to one environment, so the same key serves plan, apply and drift.
+- **Anyone with write access to the repo can bypass the approval.** Pull request workflows from branches in the same repo can read repository secrets. A writer could edit the plan workflow inside a pull request to run `apply` on production. Close this gap:
+  - Add a `CODEOWNERS` entry for `.github/workflows/` and turn on branch protection for `main` with "Require review from Code Owners", so workflow changes need a second person.
+  - Give write access only to people you'd trust with the Flagsmith dashboard anyway.
+- **Fork pull requests are safe.** GitHub gives them no secrets. The examples run only `validate` for forks and skip `plan`.
+- **Drift is the backstop.** Any change that reaches Flagsmith outside a reviewed merge, from the dashboard or from a misused key, shows up in the next drift check as an issue.
+- **Self-hosted runners only on private repos.** On a public repo, a pull request could run code on the runner's machine.
+
 ## Limits
 
 - Only each environment's default flag state. Segment overrides, identity overrides and multivariate weights are not managed yet.
 - `apply` never deletes flags. Flags removed from YAML are reported as "left alone".
-- Creating a flag creates it in every environment (Flagsmith works this way), switched off where YAML doesn't list it.
+- A new flag must be listed in every environment file, because Flagsmith creates each flag in every environment.
 - Free Flagsmith organisations get one project; FlagOps works with one project per flags folder.
 - `stale` uses Flagsmith's last-update time for each environment's flag state.
 

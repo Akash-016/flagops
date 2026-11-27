@@ -1,5 +1,11 @@
 # Copy to .github/workflows/ in the repo that holds your flag files.
-# On every pull request that touches flags/, posts the FlagOps plan as a comment.
+# On every pull request that touches flags/:
+#   - validate: checks the files offline. Needs no secrets, so it also runs on fork PRs.
+#   - plan: posts the FlagOps plan as a comment. Skipped on fork PRs (they get no secrets).
+#
+# The plan job must reach your Flagsmith. If Flagsmith is only on a private network or your
+# own machine, use a self-hosted runner instead of ubuntu-latest (on a private repo only:
+# GitHub advises against self-hosted runners for public repos).
 
 name: FlagOps plan
 
@@ -13,13 +19,21 @@ permissions:
   pull-requests: write
 
 jobs:
-  plan:
-    # The runner must be able to reach your Flagsmith. For a Flagsmith on your own
-    # machine or private network, use a self-hosted runner.
-    runs-on: self-hosted
+  validate:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: Akash-016/flagops@main
+      - uses: Akash-016/flagops@v1
+        with:
+          command: validate
+
+  plan:
+    needs: validate
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Akash-016/flagops@v1
         with:
           command: plan
           api-url: ${{ vars.FLAGSMITH_API_URL }}
