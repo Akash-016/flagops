@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Akash-016/flagops/actions/workflows/ci.yml/badge.svg)](https://github.com/Akash-016/flagops/actions/workflows/ci.yml)
 
-**Manage Flagsmith flags like code: every change reviewed in a pull request, with alerts when someone changes production by hand.**
+**Review every Flagsmith flag change in a pull request, and know when someone changes production by hand.**
 
 Built for the WeMakeDevs × Flagsmith hackathon, **Track 3: Build on Open Source Flagsmith**.
 
@@ -26,6 +26,15 @@ Your flags live in YAML files in a Git repo, one file per environment. FlagOps k
 | **Never deletes** | Flags missing from YAML are reported, not removed. |
 
 It ships as a CLI, a GitHub Action, and a one-command Docker setup.
+
+## See it working
+
+The [demo repo](https://github.com/Akash-016/flagops-demo) runs FlagOps against a real self-hosted Flagsmith:
+
+- [Pull request turning on a flag in production](https://github.com/Akash-016/flagops-demo/pull/3), with the plan comment.
+- [The apply run](https://github.com/Akash-016/flagops-demo/actions/runs/45822896350) for that merge. Development and Staging updated at once, and Production waited for approval.
+- [A drift issue](https://github.com/Akash-016/flagops-demo/issues/2) FlagOps opened after a dashboard edit, and closed by itself once Git and Flagsmith matched again.
+- [CI](https://github.com/Akash-016/flagops/actions/workflows/ci.yml) runs a full round trip against Flagsmith in Docker on every push.
 
 ## Quick start (5 minutes)
 
@@ -187,13 +196,22 @@ FlagOps makes Git the record of every flag change, and makes production changes 
 - Free Flagsmith organisations get one project; FlagOps works with one project per flags folder.
 - `stale` uses Flagsmith's last-update time for each environment's flag state.
 
-## Why not Terraform?
+## FAQ
 
-Flagsmith has an official Terraform provider, and it's a good choice if you already run Terraform. FlagOps aims at teams that don't:
+**Why not Flagsmith's own change requests?**
+Change requests and audit logs aren't in the open-source build; they come with Flagsmith's paid plans ([pricing](https://www.flagsmith.com/pricing)). If you have them, use them. FlagOps gives self-hosted open-source users a review step, and it also puts flag changes in Git next to the code that uses them.
 
-- `flagops pull` writes YAML from the flags you already have. No import step, no state file to store and lock.
-- The plan appears as a pull request comment with no extra tooling, and shows where each flag is used in your code.
-- Drift detection and stale-flag reports are built in.
+**Why not Terraform?**
+Flagsmith has an official Terraform provider, and it's a good choice if you already run Terraform. FlagOps aims at teams that don't: `flagops pull` writes YAML from the flags you already have, with no import step and no state file to store and lock. The plan appears as a pull request comment and shows where each flag is used in your code. Drift and stale-flag reports are built in.
+
+**What about segments and per-user overrides?**
+Out of scope for now. FlagOps manages each environment's default on/off and value, and leaves overrides alone. See [Limits](#limits).
+
+**Can someone bypass the review?**
+Not from a pull request: pull request workflows only get read-only keys. The admin key is only available to `apply` jobs on `main`. Someone with dashboard access can still change flags there, and the drift check reports it. See the [security model](#security-model).
+
+**Will it delete my flags?**
+No. Flags missing from the YAML are reported, never removed.
 
 ## Development
 
