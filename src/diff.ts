@@ -95,7 +95,15 @@ function describe(change: Change): string {
 // Hidden marker so the GitHub Action can find and update its own comment instead of adding a new one.
 export const COMMENT_MARKER = "<!-- flagops-plan -->";
 
-const cell = (v: FlagValue) => "`" + show(v).replace(/\|/g, "\\|") + "`";
+// Flag names, values and environment names can come from the Flagsmith dashboard, so they must
+// not be able to add Markdown, HTML or @mentions to a comment. Every character other than
+// letters, digits, space and "_.-" becomes an HTML entity, which GitHub shows as plain text.
+export function text(s: string): string {
+  return s.replace(/[^A-Za-z0-9 _.-]/g, (c) => `&#${c.codePointAt(0)};`);
+}
+export const code = (s: string) => `<code>${text(s)}</code>`;
+const plain = (s: string) => s.replace(/<\/?code>/g, "").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
+const cell = (v: FlagValue) => code(show(v));
 const onOff = (enabled: boolean) => (enabled ? "on" : "off");
 
 // Flags that apply would change or create (the ones whose blast radius matters).
@@ -114,10 +122,10 @@ function referencesMarkdown(plans: EnvironmentPlan[], refs?: Map<string, Referen
     const found = refs.get(flag) ?? [];
     let where = "not found in code";
     if (found.length > 0) {
-      where = found.slice(0, max).map((r) => `\`${r.file}:${r.line}\``).join(", ");
+      where = found.slice(0, max).map((r) => code(`${r.file}:${r.line}`)).join(", ");
       if (found.length > max) where += ` (+${found.length - max} more)`;
     }
-    lines.push(`- \`${flag}\`: ${where}`);
+    lines.push(`- ${code(flag)}: ${where}`);
   }
   return lines;
 }
@@ -132,24 +140,24 @@ export function formatPlanMarkdown(plans: EnvironmentPlan[], refs?: Map<string, 
   for (const p of plans) {
     if (p.changes.length === 0) continue;
     const isProd = productionNames.includes(p.environment.toLowerCase());
-    lines.push("", `### ${p.environment}${isProd ? " (production)" : ""}`, "");
+    lines.push("", `### ${text(p.environment)}${isProd ? " (production)" : ""}`, "");
     if (isProd && p.changes.some((c) => c.kind !== "untracked")) {
       lines.push("> [!WARNING]", "> Changes production. A reviewer must approve before they apply.", "");
     }
     lines.push("| | Flag | Before | After |", "|---|---|---|---|");
     for (const c of p.changes) {
       if (c.kind === "update") {
-        lines.push(`| ~ | \`${c.flag}\` | ${onOff(c.before.enabled)}, ${cell(c.before.value)} | **${onOff(c.after.enabled)}, ${cell(c.after.value)}** |`);
+        lines.push(`| ~ | ${code(c.flag)} | ${onOff(c.before.enabled)}, ${cell(c.before.value)} | **${onOff(c.after.enabled)}, ${cell(c.after.value)}** |`);
       } else if (c.kind === "create") {
-        lines.push(`| + | \`${c.flag}\` | (new flag) | **${onOff(c.after.enabled)}, ${cell(c.after.value)}** |`);
+        lines.push(`| + | ${code(c.flag)} | (new flag) | **${onOff(c.after.enabled)}, ${cell(c.after.value)}** |`);
       } else {
-        lines.push(`| ! | \`${c.flag}\` | ${onOff(c.before.enabled)}, ${cell(c.before.value)} | not in YAML, left alone |`);
+        lines.push(`| ! | ${code(c.flag)} | ${onOff(c.before.enabled)}, ${cell(c.before.value)} | not in YAML, left alone |`);
       }
     }
   }
 
   const unchanged = plans.filter((p) => p.changes.length === 0).map((p) => p.environment);
-  if (unchanged.length > 0 && actions > 0) lines.push("", `No changes in: ${unchanged.join(", ")}.`);
+  if (unchanged.length > 0 && actions > 0) lines.push("", `No changes in: ${unchanged.map(text).join(", ")}.`);
   lines.push(...referencesMarkdown(plans, refs));
   return lines.join("\n") + "\n";
 }
@@ -193,10 +201,10 @@ export function formatDriftMarkdown(plans: EnvironmentPlan[]): string {
   );
   for (const p of plans) {
     if (p.changes.length === 0) continue;
-    lines.push("", `### ${p.environment}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
+    lines.push("", `### ${text(p.environment)}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
     for (const c of p.changes) {
       const d = describeDrift(c);
-      lines.push(`| \`${c.flag}\` | ${d.git} | **${d.live}** | ${d.what} |`);
+      lines.push(`| ${code(c.flag)} | ${d.git} | **${d.live}** | ${d.what} |`);
     }
   }
   lines.push(
@@ -219,7 +227,7 @@ export function formatDrift(plans: EnvironmentPlan[]): string {
     lines.push(`${p.environment}:`);
     for (const c of p.changes) {
       const d = describeDrift(c);
-      lines.push(`  ${c.flag}: Git says ${d.git.replace(/`/g, "")}, Flagsmith has ${d.live.replace(/`/g, "")} (${d.what})`);
+      lines.push(`  ${c.flag}: Git says ${plain(d.git)}, Flagsmith has ${plain(d.live)} (${d.what})`);
     }
   }
   lines.push("", `Drift found in ${total} flag${total === 1 ? "" : "s"}.`);

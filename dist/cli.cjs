@@ -1202,14 +1202,14 @@ var require_foldFlowLines = __commonJS({
     var FOLD_FLOW = "flow";
     var FOLD_BLOCK = "block";
     var FOLD_QUOTED = "quoted";
-    function foldFlowLines(text, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
+    function foldFlowLines(text2, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
       if (!lineWidth || lineWidth < 0)
-        return text;
+        return text2;
       if (lineWidth < minContentWidth)
         minContentWidth = 0;
       const endStep = Math.max(1 + minContentWidth, 1 + lineWidth - indent.length);
-      if (text.length <= endStep)
-        return text;
+      if (text2.length <= endStep)
+        return text2;
       const folds = [];
       const escapedFolds = {};
       let end = lineWidth - indent.length;
@@ -1226,14 +1226,14 @@ var require_foldFlowLines = __commonJS({
       let escStart = -1;
       let escEnd = -1;
       if (mode === FOLD_BLOCK) {
-        i = consumeMoreIndentedLines(text, i, indent.length);
+        i = consumeMoreIndentedLines(text2, i, indent.length);
         if (i !== -1)
           end = i + endStep;
       }
-      for (let ch; ch = text[i += 1]; ) {
+      for (let ch; ch = text2[i += 1]; ) {
         if (mode === FOLD_QUOTED && ch === "\\") {
           escStart = i;
-          switch (text[i + 1]) {
+          switch (text2[i + 1]) {
             case "x":
               i += 3;
               break;
@@ -1250,12 +1250,12 @@ var require_foldFlowLines = __commonJS({
         }
         if (ch === "\n") {
           if (mode === FOLD_BLOCK)
-            i = consumeMoreIndentedLines(text, i, indent.length);
+            i = consumeMoreIndentedLines(text2, i, indent.length);
           end = i + indent.length + endStep;
           split = void 0;
         } else {
           if (ch === " " && prev && prev !== " " && prev !== "\n" && prev !== "	") {
-            const next = text[i + 1];
+            const next = text2[i + 1];
             if (next && next !== " " && next !== "\n" && next !== "	")
               split = i;
           }
@@ -1267,12 +1267,12 @@ var require_foldFlowLines = __commonJS({
             } else if (mode === FOLD_QUOTED) {
               while (prev === " " || prev === "	") {
                 prev = ch;
-                ch = text[i += 1];
+                ch = text2[i += 1];
                 overflow = true;
               }
               const j = i > escEnd + 1 ? i - 2 : escStart - 1;
               if (escapedFolds[j])
-                return text;
+                return text2;
               folds.push(j);
               escapedFolds[j] = true;
               end = j + endStep;
@@ -1287,39 +1287,39 @@ var require_foldFlowLines = __commonJS({
       if (overflow && onOverflow)
         onOverflow();
       if (folds.length === 0)
-        return text;
+        return text2;
       if (onFold)
         onFold();
-      let res = text.slice(0, folds[0]);
+      let res = text2.slice(0, folds[0]);
       for (let i2 = 0; i2 < folds.length; ++i2) {
         const fold = folds[i2];
-        const end2 = folds[i2 + 1] || text.length;
+        const end2 = folds[i2 + 1] || text2.length;
         if (fold === 0)
           res = `
-${indent}${text.slice(0, end2)}`;
+${indent}${text2.slice(0, end2)}`;
         else {
           if (mode === FOLD_QUOTED && escapedFolds[fold])
-            res += `${text[fold]}\\`;
+            res += `${text2[fold]}\\`;
           res += `
-${indent}${text.slice(fold + 1, end2)}`;
+${indent}${text2.slice(fold + 1, end2)}`;
         }
       }
       return res;
     }
-    function consumeMoreIndentedLines(text, i, indent) {
+    function consumeMoreIndentedLines(text2, i, indent) {
       let end = i;
       let start = i + 1;
-      let ch = text[start];
+      let ch = text2[start];
       while (ch === " " || ch === "	") {
         if (i < start + indent) {
-          ch = text[++i];
+          ch = text2[++i];
         } else {
           do {
-            ch = text[++i];
+            ch = text2[++i];
           } while (ch && ch !== "\n");
           end = i;
           start = i + 1;
-          ch = text[start];
+          ch = text2[start];
         }
       }
       return end;
@@ -1382,8 +1382,8 @@ var require_stringifyString = __commonJS({
             case "u":
               {
                 str += json2.slice(start, i);
-                const code = json2.substr(i + 2, 4);
-                switch (code) {
+                const code2 = json2.substr(i + 2, 4);
+                switch (code2) {
                   case "0000":
                     str += "\\0";
                     break;
@@ -1409,8 +1409,8 @@ var require_stringifyString = __commonJS({
                     str += "\\P";
                     break;
                   default:
-                    if (code.substr(0, 2) === "00")
-                      str += "\\x" + code.substr(2);
+                    if (code2.substr(0, 2) === "00")
+                      str += "\\x" + code2.substr(2);
                     else
                       str += json2.substr(i, 6);
                 }
@@ -3909,22 +3909,22 @@ var require_errors = __commonJS({
   "node_modules/yaml/dist/errors.js"(exports2) {
     "use strict";
     var YAMLError = class extends Error {
-      constructor(name, pos, code, message) {
+      constructor(name, pos, code2, message) {
         super();
         this.name = name;
-        this.code = code;
+        this.code = code2;
         this.message = message;
         this.pos = pos;
       }
     };
     var YAMLParseError = class extends YAMLError {
-      constructor(pos, code, message) {
-        super("YAMLParseError", pos, code, message);
+      constructor(pos, code2, message) {
+        super("YAMLParseError", pos, code2, message);
       }
     };
     var YAMLWarning = class extends YAMLError {
-      constructor(pos, code, message) {
-        super("YAMLWarning", pos, code, message);
+      constructor(pos, code2, message) {
+        super("YAMLWarning", pos, code2, message);
       }
     };
     var prettifyError2 = (src, lc) => (error62) => {
@@ -4833,7 +4833,7 @@ var require_resolve_flow_scalar = __commonJS({
       const { offset, type, source, end } = scalar;
       let _type;
       let value;
-      const _onError = (rel, code, msg) => onError(offset + rel, code, msg);
+      const _onError = (rel, code2, msg) => onError(offset + rel, code2, msg);
       switch (type) {
         case "scalar":
           _type = Scalar.Scalar.PLAIN;
@@ -5031,9 +5031,9 @@ var require_resolve_flow_scalar = __commonJS({
     function parseCharCode(source, offset, length, onError) {
       const cc = source.substr(offset, length);
       const ok = cc.length === length && /^[0-9a-fA-F]+$/.test(cc);
-      const code = ok ? parseInt(cc, 16) : NaN;
+      const code2 = ok ? parseInt(cc, 16) : NaN;
       try {
-        return String.fromCodePoint(code);
+        return String.fromCodePoint(code2);
       } catch {
         const raw = source.substr(offset - 2, length + 2);
         onError(offset - 2, "BAD_DQ_ESCAPE", `Invalid escape sequence ${raw}`);
@@ -5355,12 +5355,12 @@ var require_composer = __commonJS({
         this.prelude = [];
         this.errors = [];
         this.warnings = [];
-        this.onError = (source, code, message, warning) => {
+        this.onError = (source, code2, message, warning) => {
           const pos = getErrorPos(source);
           if (warning)
-            this.warnings.push(new errors.YAMLWarning(pos, code, message));
+            this.warnings.push(new errors.YAMLWarning(pos, code2, message));
           else
-            this.errors.push(new errors.YAMLParseError(pos, code, message));
+            this.errors.push(new errors.YAMLParseError(pos, code2, message));
         };
         this.directives = new directives.Directives({ version: options.version || "1.2" });
         this.options = options;
@@ -5522,12 +5522,12 @@ var require_cst_scalar = __commonJS({
     var stringifyString = require_stringifyString();
     function resolveAsScalar(token, strict = true, onError) {
       if (token) {
-        const _onError = (pos, code, message) => {
+        const _onError = (pos, code2, message) => {
           const offset = typeof pos === "number" ? pos : Array.isArray(pos) ? pos[0] : pos.offset;
           if (onError)
-            onError(offset, code, message);
+            onError(offset, code2, message);
           else
-            throw new errors.YAMLParseError([offset, offset + 1], code, message);
+            throw new errors.YAMLParseError([offset, offset + 1], code2, message);
         };
         switch (token.type) {
           case "scalar":
@@ -7577,11 +7577,11 @@ var CommanderError = class extends Error {
    * @param {string} code an id string representing the error
    * @param {string} message human-readable description of the error
    */
-  constructor(exitCode, code, message) {
+  constructor(exitCode, code2, message) {
     super(message);
     Error.captureStackTrace(this, this.constructor);
     this.name = this.constructor.name;
-    this.code = code;
+    this.code = code2;
     this.exitCode = exitCode;
     this.nestedError = void 0;
   }
@@ -9138,9 +9138,9 @@ Expecting one of '${allowedValues.join("', '")}'`);
    * @return never
    * @private
    */
-  _exit(exitCode, code, message) {
+  _exit(exitCode, code2, message) {
     if (this._exitCallback) {
-      this._exitCallback(new CommanderError(exitCode, code, message));
+      this._exitCallback(new CommanderError(exitCode, code2, message));
     }
     import_node_process.default.exit(exitCode);
   }
@@ -9780,14 +9780,14 @@ Expecting one of '${allowedValues.join("', '")}'`);
       });
     }
     const exitCallback = this._exitCallback;
-    proc.on("close", (code) => {
-      code = code ?? 1;
+    proc.on("close", (code2) => {
+      code2 = code2 ?? 1;
       if (!exitCallback) {
-        import_node_process.default.exit(code);
+        import_node_process.default.exit(code2);
       } else {
         exitCallback(
           new CommanderError(
-            code,
+            code2,
             "commander.executeSubCommandAsync",
             "(close)"
           )
@@ -10294,8 +10294,8 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
     const config2 = errorOptions || {};
     const exitCode = config2.exitCode || 1;
-    const code = config2.code || "commander.error";
-    this._exit(exitCode, code, message);
+    const code2 = config2.code || "commander.error";
+    this._exit(exitCode, code2, message);
   }
   /**
    * Apply any option related environment variables, if option does
@@ -10699,9 +10699,9 @@ Expecting one of '${allowedValues.join("', '")}'`);
       helpWidth: context.helpWidth,
       outputHasColors: context.hasColors
     });
-    const text = helper.formatHelp(this, helper);
-    if (context.hasColors) return text;
-    return this._outputConfiguration.stripColor(text);
+    const text2 = helper.formatHelp(this, helper);
+    if (context.hasColors) return text2;
+    return this._outputConfiguration.stripColor(text2);
   }
   /**
    * @typedef HelpContext
@@ -10861,7 +10861,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
    * @param {(string | Function)} text - string to add, or a function returning a string
    * @return {Command} `this` command for chaining
    */
-  addHelpText(position, text) {
+  addHelpText(position, text2) {
     const allowedValues = ["beforeAll", "before", "after", "afterAll"];
     if (!allowedValues.includes(position)) {
       throw new Error(`Unexpected value for position to addHelpText.
@@ -10870,10 +10870,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
     const helpEvent = `${position}Help`;
     this.on(helpEvent, (context) => {
       let helpStr;
-      if (typeof text === "function") {
-        helpStr = text({ error: context.error, command: context.command });
+      if (typeof text2 === "function") {
+        helpStr = text2({ error: context.error, command: context.command });
       } else {
-        helpStr = text;
+        helpStr = text2;
       }
       if (helpStr) {
         context.write(`${helpStr}
@@ -10961,8 +10961,12 @@ function getEnvironmentKeys() {
 }
 
 // src/flagsmith.ts
+var TIMEOUT_MS = 3e4;
 async function readEnvironmentDocument(apiUrl, serverKey) {
-  const res = await fetch(`${apiUrl}/environment-document/`, { headers: { "X-Environment-Key": serverKey } });
+  const res = await fetch(`${apiUrl}/environment-document/`, {
+    headers: { "X-Environment-Key": serverKey },
+    signal: AbortSignal.timeout(TIMEOUT_MS)
+  });
   if (res.status === 401 || res.status === 403) {
     throw new Error(
       `Flagsmith rejected an environment key starting "${serverKey.slice(0, 8)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`
@@ -10980,6 +10984,7 @@ var FlagsmithClient = class {
   adminKey;
   async request(url2, init = {}) {
     const res = await fetch(url2, {
+      signal: AbortSignal.timeout(TIMEOUT_MS),
       ...init,
       headers: {
         Authorization: `Api-Key ${this.adminKey}`,
@@ -14140,12 +14145,12 @@ function isIso7064Mod97(iban3) {
   let remainder = 0;
   const len = iban3.length;
   for (let i = 4; i < len; i++) {
-    const code = iban3.charCodeAt(i);
-    remainder = (code >= 65 ? remainder * 100 + (code - 55) : remainder * 10 + (code - 48)) % 97;
+    const code2 = iban3.charCodeAt(i);
+    remainder = (code2 >= 65 ? remainder * 100 + (code2 - 55) : remainder * 10 + (code2 - 48)) % 97;
   }
   for (let i = 0; i < 4; i++) {
-    const code = iban3.charCodeAt(i);
-    remainder = (code >= 65 ? remainder * 100 + (code - 55) : remainder * 10 + (code - 48)) % 97;
+    const code2 = iban3.charCodeAt(i);
+    remainder = (code2 >= 65 ? remainder * 100 + (code2 - 55) : remainder * 10 + (code2 - 48)) % 97;
   }
   return remainder === 1;
 }
@@ -20389,8 +20394,8 @@ function ko_default() {
 }
 
 // node_modules/zod/v4/locales/lt.js
-var capitalizeFirstCharacter = (text) => {
-  return text.charAt(0).toUpperCase() + text.slice(1);
+var capitalizeFirstCharacter = (text2) => {
+  return text2.charAt(0).toUpperCase() + text2.slice(1);
 };
 function getUnitTypeFromNumber(number4) {
   const abs = Math.abs(number4);
@@ -24091,12 +24096,12 @@ function compileFn(schema, options) {
   doc.write(outputAccessor === null ? `return true;` : `return ${outputAccessor};`);
   const constantNames = ["INVALID", ...ctx.constants.keys()];
   const constantValues = [INVALID, ...ctx.constants.values()];
-  const code = doc.content.join("\n");
+  const code2 = doc.content.join("\n");
   const fullCode = options?.debug ? constantNames.length > 0 ? `// Constants: ${constantNames.join(", ")}
-${code}` : code : "";
+${code2}` : code2 : "";
   const F = Function;
   const factoryCode = `return (input) => {
-${code}
+${code2}
 }`;
   let fn;
   try {
@@ -30758,13 +30763,39 @@ function date4(params) {
 
 // src/flagfile.ts
 var import_yaml = __toESM(require_dist2(), 1);
-var flagSchema = external_exports.object({
-  enabled: external_exports.boolean(),
-  value: external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean(), external_exports.null()]).default(null)
+var MAX_INT = 2147483647;
+var MAX_TEXT = 2e4;
+var flagValue = external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean(), external_exports.null()], {
+  error: (iss) => iss.input === void 0 ? "missing (write value: null if the flag has no value)" : "expected text, a number, true/false or null"
+}).superRefine((v, ctx) => {
+  const problem = (message) => ctx.addIssue({ code: "custom", message });
+  if (typeof v === "number") {
+    if (!Number.isInteger(v)) problem('Flagsmith stores whole numbers only; quote decimals as text, for example "1.5"');
+    else if (v > MAX_INT || v < -MAX_INT - 1) problem(`number too big for Flagsmith (limit ${MAX_INT}); quote it as text`);
+  } else if (typeof v === "string") {
+    if (v.length > MAX_TEXT) problem(`text longer than ${MAX_TEXT} characters`);
+    else if (v !== v.trim()) problem("Flagsmith trims leading and trailing spaces; remove them");
+  }
 });
-var flagFileSchema = external_exports.object({
+var flagSchema = external_exports.strictObject({
+  enabled: external_exports.boolean(),
+  value: flagValue
+  // required: a typo such as "vaule" must not turn into null
+});
+var FLAG_NAME = /^[A-Za-z0-9_.-]+$/;
+var flagFileSchema = external_exports.strictObject({
   environment: external_exports.string().min(1),
-  flags: external_exports.record(external_exports.string(), flagSchema).default({})
+  flags: external_exports.record(external_exports.string(), flagSchema).default({}).superRefine((flags, ctx) => {
+    const seen = /* @__PURE__ */ new Map();
+    for (const name of Object.keys(flags)) {
+      if (!FLAG_NAME.test(name)) {
+        ctx.addIssue({ code: "custom", path: [name], message: "flag names may use only letters, digits, _ . and -" });
+      }
+      const other = seen.get(name.toLowerCase());
+      if (other) ctx.addIssue({ code: "custom", path: [name], message: `same as "${other}" except for case; Flagsmith treats them as one flag` });
+      seen.set(name.toLowerCase(), name);
+    }
+  })
 });
 function fileNameFor(environmentName) {
   return environmentName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".yaml";
@@ -30783,8 +30814,8 @@ function buildFlagFile(environmentName, features, states) {
 function toYaml(file2) {
   return import_yaml.default.stringify(file2);
 }
-function parseFlagFile(text, source) {
-  const result = flagFileSchema.safeParse(import_yaml.default.parse(text));
+function parseFlagFile(text2, source) {
+  const result = flagFileSchema.safeParse(import_yaml.default.parse(text2));
   if (!result.success) {
     const problems = result.error.issues.map((i) => `  ${i.path.join(".") || "(top)"}: ${i.message}`).join("\n");
     throw new Error(`${source} is not a valid flag file:
@@ -30875,9 +30906,9 @@ async function findReferences(root, flagNames, skipPaths = []) {
     if ((await (0, import_promises.stat)(file2)).size > MAX_FILE_BYTES) continue;
     const lines = (await (0, import_promises.readFile)(file2, "utf8")).split(/\r?\n/);
     const rel = import_node_path2.default.relative(root, file2).split(import_node_path2.default.sep).join("/");
-    lines.forEach((text, i) => {
+    lines.forEach((text2, i) => {
       for (const [name, re] of patterns) {
-        if (re.test(text)) found.get(name).push({ file: rel, line: i + 1 });
+        if (re.test(text2)) found.get(name).push({ file: rel, line: i + 1 });
       }
     });
   }
@@ -30950,7 +30981,12 @@ function describe3(change) {
   }
 }
 var COMMENT_MARKER = "<!-- flagops-plan -->";
-var cell = (v) => "`" + show(v).replace(/\|/g, "\\|") + "`";
+function text(s) {
+  return s.replace(/[^A-Za-z0-9 _.-]/g, (c) => `&#${c.codePointAt(0)};`);
+}
+var code = (s) => `<code>${text(s)}</code>`;
+var plain = (s) => s.replace(/<\/?code>/g, "").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
+var cell = (v) => code(show(v));
 var onOff = (enabled) => enabled ? "on" : "off";
 function changedFlags(plans) {
   const names = /* @__PURE__ */ new Set();
@@ -30966,10 +31002,10 @@ function referencesMarkdown(plans, refs) {
     const found = refs.get(flag) ?? [];
     let where = "not found in code";
     if (found.length > 0) {
-      where = found.slice(0, max).map((r) => `\`${r.file}:${r.line}\``).join(", ");
+      where = found.slice(0, max).map((r) => code(`${r.file}:${r.line}`)).join(", ");
       if (found.length > max) where += ` (+${found.length - max} more)`;
     }
-    lines.push(`- \`${flag}\`: ${where}`);
+    lines.push(`- ${code(flag)}: ${where}`);
   }
   return lines;
 }
@@ -30981,23 +31017,23 @@ function formatPlanMarkdown(plans, refs) {
   for (const p of plans) {
     if (p.changes.length === 0) continue;
     const isProd = productionNames.includes(p.environment.toLowerCase());
-    lines.push("", `### ${p.environment}${isProd ? " (production)" : ""}`, "");
+    lines.push("", `### ${text(p.environment)}${isProd ? " (production)" : ""}`, "");
     if (isProd && p.changes.some((c) => c.kind !== "untracked")) {
       lines.push("> [!WARNING]", "> Changes production. A reviewer must approve before they apply.", "");
     }
     lines.push("| | Flag | Before | After |", "|---|---|---|---|");
     for (const c of p.changes) {
       if (c.kind === "update") {
-        lines.push(`| ~ | \`${c.flag}\` | ${onOff(c.before.enabled)}, ${cell(c.before.value)} | **${onOff(c.after.enabled)}, ${cell(c.after.value)}** |`);
+        lines.push(`| ~ | ${code(c.flag)} | ${onOff(c.before.enabled)}, ${cell(c.before.value)} | **${onOff(c.after.enabled)}, ${cell(c.after.value)}** |`);
       } else if (c.kind === "create") {
-        lines.push(`| + | \`${c.flag}\` | (new flag) | **${onOff(c.after.enabled)}, ${cell(c.after.value)}** |`);
+        lines.push(`| + | ${code(c.flag)} | (new flag) | **${onOff(c.after.enabled)}, ${cell(c.after.value)}** |`);
       } else {
-        lines.push(`| ! | \`${c.flag}\` | ${onOff(c.before.enabled)}, ${cell(c.before.value)} | not in YAML, left alone |`);
+        lines.push(`| ! | ${code(c.flag)} | ${onOff(c.before.enabled)}, ${cell(c.before.value)} | not in YAML, left alone |`);
       }
     }
   }
   const unchanged = plans.filter((p) => p.changes.length === 0).map((p) => p.environment);
-  if (unchanged.length > 0 && actions > 0) lines.push("", `No changes in: ${unchanged.join(", ")}.`);
+  if (unchanged.length > 0 && actions > 0) lines.push("", `No changes in: ${unchanged.map(text).join(", ")}.`);
   lines.push(...referencesMarkdown(plans, refs));
   return lines.join("\n") + "\n";
 }
@@ -31033,10 +31069,10 @@ function formatDriftMarkdown(plans) {
   );
   for (const p of plans) {
     if (p.changes.length === 0) continue;
-    lines.push("", `### ${p.environment}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
+    lines.push("", `### ${text(p.environment)}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
     for (const c of p.changes) {
       const d = describeDrift(c);
-      lines.push(`| \`${c.flag}\` | ${d.git} | **${d.live}** | ${d.what} |`);
+      lines.push(`| ${code(c.flag)} | ${d.git} | **${d.live}** | ${d.what} |`);
     }
   }
   lines.push(
@@ -31058,7 +31094,7 @@ function formatDrift(plans) {
     lines.push(`${p.environment}:`);
     for (const c of p.changes) {
       const d = describeDrift(c);
-      lines.push(`  ${c.flag}: Git says ${d.git.replace(/`/g, "")}, Flagsmith has ${d.live.replace(/`/g, "")} (${d.what})`);
+      lines.push(`  ${c.flag}: Git says ${plain(d.git)}, Flagsmith has ${plain(d.live)} (${d.what})`);
     }
   }
   lines.push("", `Drift found in ${total} flag${total === 1 ? "" : "s"}.`);
@@ -31209,7 +31245,11 @@ function adminSource(fs2, projectId) {
       }
       return live;
     },
-    missing: "Flagsmith only has"
+    missing: "Flagsmith only has",
+    async archived() {
+      features ??= fs2.listFeatures(projectId);
+      return (await features).filter((f) => f.is_archived).map((f) => f.name);
+    }
   };
 }
 function liveFromDocument(doc) {
@@ -31253,6 +31293,19 @@ async function buildPlans(source, dir, onlyEnvs) {
     const live = await source.readLive(env);
     plans.push({ ...diffEnvironment(file2, live), env });
   }
+  const yamlNames = Object.keys(files[0]?.flags ?? {});
+  const archived = new Map((await source.archived?.())?.map((n) => [n.toLowerCase(), n]) ?? []);
+  const problems = yamlNames.filter((n) => archived.has(n.toLowerCase())).map((n) => `"${n}" is archived in Flagsmith (as "${archived.get(n.toLowerCase())}"). Unarchive it, or remove it from every flag file.`);
+  for (const p of plans) {
+    const liveNames = new Map(
+      p.changes.filter((c) => c.kind === "untracked").map((c) => [c.flag.toLowerCase(), c.flag])
+    );
+    for (const c of p.changes) {
+      const other = c.kind === "create" ? liveNames.get(c.flag.toLowerCase()) : void 0;
+      if (other) problems.push(`"${c.flag}" differs only in case from "${other}" in Flagsmith. Use the same spelling.`);
+    }
+  }
+  if (problems.length > 0) throw new Error([...new Set(problems)].join("\n"));
   return sortByEnvironment(plans);
 }
 

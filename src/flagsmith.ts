@@ -53,8 +53,14 @@ export interface EnvironmentDocument {
   }[];
 }
 
+// A Flagsmith that never answers should fail the run, not hang it.
+const TIMEOUT_MS = 30_000;
+
 export async function readEnvironmentDocument(apiUrl: string, serverKey: string): Promise<EnvironmentDocument> {
-  const res = await fetch(`${apiUrl}/environment-document/`, { headers: { "X-Environment-Key": serverKey } });
+  const res = await fetch(`${apiUrl}/environment-document/`, {
+    headers: { "X-Environment-Key": serverKey },
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
   if (res.status === 401 || res.status === 403) {
     throw new Error(
       `Flagsmith rejected an environment key starting "${serverKey.slice(0, 8)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`,
@@ -77,6 +83,7 @@ export class FlagsmithClient {
 
   private async request<T>(url: string, init: RequestInit = {}): Promise<T> {
     const res = await fetch(url, {
+      signal: AbortSignal.timeout(TIMEOUT_MS),
       ...init,
       headers: {
         Authorization: `Api-Key ${this.adminKey}`,

@@ -43,9 +43,25 @@ describe("parseFlagFile", () => {
     expect(parseFlagFile(toYaml(original), "dev.yaml")).toEqual(original);
   });
 
-  it("fills in a missing value as null", () => {
-    const file = parseFlagFile("environment: Dev\nflags:\n  a:\n    enabled: true\n", "dev.yaml");
-    expect(file.flags.a).toEqual({ enabled: true, value: null });
+  it("rejects a missing value and unknown keys, so a typo can't turn a value into null", () => {
+    expect(() => parseFlagFile("environment: Dev\nflags:\n  a:\n    enabled: true\n", "dev.yaml")).toThrow(/flags\.a\.value: missing/);
+    expect(() => parseFlagFile("environment: Dev\nflags:\n  a:\n    enabled: true\n    value: null\n    vaule: 25\n", "dev.yaml")).toThrow(/vaule/);
+    expect(() => parseFlagFile("enviroment: Dev\nflags: {}\n", "dev.yaml")).toThrow(/enviroment/);
+  });
+
+  it("rejects values Flagsmith would store differently", () => {
+    const bad = (value: string) => () =>
+      parseFlagFile(`environment: Dev\nflags:\n  a:\n    enabled: true\n    value: ${value}\n`, "dev.yaml");
+    expect(bad("1.5")).toThrow(/whole numbers/);
+    expect(bad("99999999999")).toThrow(/too big/);
+    expect(bad('"  padded  "')).toThrow(/trims/);
+    expect(bad("x".repeat(20001))).toThrow(/longer than/);
+    expect(bad('"1.5"')).not.toThrow();
+    expect(bad("-5")).not.toThrow();
+  });
+
+  it("rejects flag names that could break the Markdown in pull request comments", () => {
+    expect(() => parseFlagFile("environment: Dev\nflags:\n  'evil`|x':\n    enabled: true\n    value: null\n", "dev.yaml")).toThrow(/flag names/);
   });
 
   it("explains what is wrong with a bad file", () => {

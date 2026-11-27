@@ -91,7 +91,8 @@ runs:
           const { owner, repo } = context.repo;
           const issue_number = context.issue.number;
           const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
-          const mine = comments.find((c) => c.body && c.body.startsWith(marker));
+          // Only a bot's comment: anyone can post a comment that starts with the marker.
+          const mine = comments.find((c) => c.user?.type === "Bot" && c.body?.startsWith(marker));
           if (mine) {
             await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
           } else {
@@ -113,7 +114,8 @@ runs:
           const marker = "<!-- flagops-drift -->";
           const { owner, repo } = context.repo;
           const open = await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: "open", per_page: 100 });
-          const existing = open.find((i) => !i.pull_request && i.body && i.body.startsWith(marker));
+          // Only a bot's issue: anyone can open an issue that starts with the marker.
+          const existing = open.find((i) => !i.pull_request && i.user?.type === "Bot" && i.body?.startsWith(marker));
           const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
 
           if (drift && existing) {

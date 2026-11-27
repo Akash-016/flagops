@@ -48,6 +48,9 @@ export interface LiveSource {
   readLive(env: Environment): Promise<LiveFlags>;
   // Ends the error when a flag file names an environment this source doesn't have.
   missing: string;
+  // Names of archived flags. Only the Admin API reports them; environment documents
+  // include archived flags like any other.
+  archived?(): Promise<string[]>;
 }
 
 export function adminSource(fs: FlagsmithClient, projectId: number): LiveSource {
@@ -65,6 +68,10 @@ export function adminSource(fs: FlagsmithClient, projectId: number): LiveSource 
       return live;
     },
     missing: "Flagsmith only has",
+    async archived() {
+      features ??= fs.listFeatures(projectId);
+      return (await features).filter((f) => f.is_archived).map((f) => f.name);
+    },
   };
 }
 
@@ -119,5 +126,24 @@ export async function buildPlans(source: LiveSource, dir: string, onlyEnvs?: str
     const live = await source.readLive(env);
     plans.push({ ...diffEnvironment(file, live), env });
   }
+
+  // Flagsmith rejects a new flag whose name matches an existing one in any case, archived or
+  // not. Stop here, before apply changes anything, with a message that says what to do.
+  const yamlNames = Object.keys(files[0]?.flags ?? {});
+  const archived = new Map((await source.archived?.())?.map((n) => [n.toLowerCase(), n]) ?? []);
+  const problems = yamlNames
+    .filter((n) => archived.has(n.toLowerCase()))
+    .map((n) => `"${n}" is archived in Flagsmith (as "${archived.get(n.toLowerCase())}"). Unarchive it, or remove it from every flag file.`);
+  for (const p of plans) {
+    const liveNames = new Map(
+      p.changes.filter((c) => c.kind === "untracked").map((c) => [c.flag.toLowerCase(), c.flag]),
+    );
+    for (const c of p.changes) {
+      const other = c.kind === "create" ? liveNames.get(c.flag.toLowerCase()) : undefined;
+      if (other) problems.push(`"${c.flag}" differs only in case from "${other}" in Flagsmith. Use the same spelling.`);
+    }
+  }
+  if (problems.length > 0) throw new Error([...new Set(problems)].join("\n"));
+
   return sortByEnvironment(plans);
 }

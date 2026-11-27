@@ -60,7 +60,18 @@ describe("formatPlanMarkdown", () => {
     expect(md.startsWith(COMMENT_MARKER)).toBe(true);
     expect(md).toContain("### Production (production)");
     expect(md).toContain("A reviewer must approve");
-    expect(md).toContain("| ~ | `a` | off, `null` | **on, `\"x\\|y\"`** |");
+    expect(md).toContain("| ~ | <code>a</code> | off, <code>null</code> | **on, <code>&#34;x&#124;y&#34;</code>** |");
+  });
+
+  it("can't be broken by names or values set in the Flagsmith dashboard", () => {
+    const evil = "evil`|\n\nNo flag changes.\n\n<!-- @someone";
+    const plan = diffEnvironment(wanted({}), live({ [evil]: [true, evil] }));
+    const md = formatPlanMarkdown([plan]);
+    const body = md.slice(COMMENT_MARKER.length);
+    for (const bad of ["`", "<!--", "@someone"]) expect(body).not.toContain(bad);
+    const rows = body.split("\n").filter((l) => l.includes("evil"));
+    expect(rows).toHaveLength(1); // the name's newlines didn't split the row
+    expect(rows[0].split("|")).toHaveLength(6); // nor did its pipe add a column    expect(formatDrift([plan])).toContain(evil); // terminal output stays readable
   });
 
   it("says so when there is nothing to change", () => {
@@ -92,9 +103,9 @@ describe("blast radius in the plan", () => {
     ]);
     const md = formatPlanMarkdown([plan], refs);
     expect(md).toContain("### Where these flags are used");
-    expect(md).toContain("- `banner`: not found in code");
-    expect(md).toContain("- `cart`: `src/cart.ts:4`");
-    expect(md).not.toContain("- `old`");
+    expect(md).toContain("- <code>banner</code>: not found in code");
+    expect(md).toContain("- <code>cart</code>: <code>src&#47;cart.ts&#58;4</code>");
+    expect(md).not.toContain("<code>old</code>:");
     expect(formatPlan([plan], refs)).toContain("  cart: src/cart.ts:4");
   });
 });
@@ -109,9 +120,9 @@ describe("drift", () => {
     const md = formatDriftMarkdown([plan]);
     expect(md.startsWith(DRIFT_MARKER)).toBe(true);
     expect(md).toContain("**3 flags** in Flagsmith no longer match");
-    expect(md).toContain("| `cart` | on, `10` | **on, `99`** | changed outside Git |");
-    expect(md).toContain("| `gone` | on, `null` | **missing** | deleted outside Git |");
-    expect(md).toContain("| `extra` | (not in Git) | **off, `null`** | added outside Git |");
+    expect(md).toContain("| <code>cart</code> | on, <code>10</code> | **on, <code>99</code>** | changed outside Git |");
+    expect(md).toContain("| <code>gone</code> | on, <code>null</code> | **missing** | deleted outside Git |");
+    expect(md).toContain("| <code>extra</code> | (not in Git) | **off, <code>null</code>** | added outside Git |");
     expect(formatDrift([plan])).toContain("cart: Git says on, 10, Flagsmith has on, 99 (changed outside Git)");
   });
 
