@@ -1,0 +1,124 @@
+# Unit tests, plus a full round trip against a real self-hosted Flagsmith in Docker:
+# seed -> pull -> validate -> plan -> apply -> drift -> stale.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Build, and check the committed dist/ is up to date
+        run: |
+          npm run build
+          git diff --exit-code dist || (echo "dist/ is out of date: run npm run build and commit it" && exit 1)
+
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      FLAGSMITH_API_URL: http://localhost:8000/api/v1
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: Start Flagsmith
+        run: |
+          docker compose up -d
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:8000/health/readiness/ > /dev/null; then echo "Flagsmith is up"; exit 0; fi
+            sleep 2
+          done
+          docker compose logs flagsmith | tail -50
+          exit 1
+
+      - name: Create user, organisation, project and API key
+        run: npx tsx scripts/ci-bootstrap.ts
+
+      - name: Seed demo flags
+        run: npm run seed
+
+      - name: Round trip
+        run: |
+          cli="node $GITHUB_WORKSPACE/dist/cli.cjs"
+          mkdir -p "$RUNNER_TEMP/e2e" && cd "$RUNNER_TEMP/e2e"
+
+          expect_exit() { # expect_exit <code> <command...>
+            local want=$1; shift
+            set +e; "$@"; local got=$?; set -e
+            if [ "$got" -ne "$want" ]; then echo "::error::expected exit $want, got $got: $*"; exit 1; fi
+          }
+
+          echo "--- pull"
+          $cli pull
+          ls flags
+          $cli validate
+
+          echo "--- drift right after pull: none"
+          expect_exit 0 $cli drift
+
+          echo "--- stale: flags tagged permanent are skipped"
+          $cli stale --days 0 --no-code | tee stale.txt
+          grep -q dark_mode stale.txt
+          if grep -q maintenance_mode stale.txt; then echo "::error::permanent flag listed as stale"; exit 1; fi
+
+          echo "--- edit production.yaml, plan, apply"
+          sed -i '/max_cart_items:/{n;n;s/value: 10/value: 25/}' flags/production.yaml
+          grep -A2 max_cart_items: flags/production.yaml
+          $cli plan --no-code | tee plan.txt
+          grep -q max_cart_items plan.txt
+          $cli apply --yes
+          expect_exit 0 $cli drift
+
+          echo "--- a new flag in every file: created, and no false drift"
+          for f in flags/*.yaml; do
+            if [ "$f" = flags/development.yaml ]; then on=true; val='"hello"'; else on=false; val=null; fi
+            printf '  ci_new_flag:\n    enabled: %s\n    value: %s\n' "$on" "$val" >> "$f"
+          done
+          $cli validate
+          $cli apply --yes
+          expect_exit 0 $cli drift
+
+          echo "--- a new flag in only one file: rejected offline"
+          cp -r flags flags-bad
+          printf '  only_in_dev:\n    enabled: true\n    value: null\n' >> flags-bad/development.yaml
+          expect_exit 1 $cli validate --dir flags-bad
+
+          echo "--- change Production by hand through the API: drift found"
+          auth="Authorization: Api-Key $FLAGSMITH_ADMIN_KEY"
+          env_key=$(curl -sf -H "$auth" "$FLAGSMITH_API_URL/environments/?project=$FLAGSMITH_PROJECT" \
+            | jq -r '(.results? // .) | .[] | select(.name=="Production") | .api_key')
+          feature=$(curl -sf -H "$auth" "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/features/?search=dark_mode" \
+            | jq -r '(.results? // .) | .[] | select(.name=="dark_mode") | .id')
+          state=$(curl -sf -H "$auth" "$FLAGSMITH_API_URL/environments/$env_key/featurestates/?feature=$feature" \
+            | jq -r '(.results? // .) | .[] | select(.identity==null and .feature_segment==null) | .id')
+          curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json" \
+            -d '{"enabled": false}' "$FLAGSMITH_API_URL/environments/$env_key/featurestates/$state/" > /dev/null
+          expect_exit 2 $cli drift
+
+          echo "--- apply puts it back"
+          $cli apply --yes
+          expect_exit 0 $cli drift
+          echo "All round-trip checks passed."
+
+      - name: Flagsmith logs on failure
+        if: failure()
+        run: docker compose logs --tail 100

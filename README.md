@@ -1,5 +1,7 @@
 # FlagOps
 
+[![CI](https://github.com/Akash-016/flagops/actions/workflows/ci.yml/badge.svg)](https://github.com/Akash-016/flagops/actions/workflows/ci.yml)
+
 **Manage Flagsmith flags like code: every change reviewed in a pull request, with alerts when someone changes production by hand.**
 
 Built for the WeMakeDevs × Flagsmith hackathon, **Track 3: Build on Open Source Flagsmith**.
@@ -185,6 +187,7 @@ Flagsmith has an official Terraform provider, and it's a good choice if you alre
 ```bash
 npm install
 npm test           # unit tests (vitest)
+                   # CI also runs a full round trip against Flagsmith in Docker: .github/workflows/ci.yml
 npm run build      # type check + bundle to dist/
 npm run dev -- plan   # run the CLI from source
 ```
