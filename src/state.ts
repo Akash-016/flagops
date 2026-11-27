@@ -5,8 +5,20 @@ import path from "node:path";
 import { parseFlagFile, type FlagFile } from "./flagfile.js";
 import type { Environment, Feature, FlagsmithClient } from "./flagsmith.js";
 import { diffEnvironment, sortByEnvironment, type EnvironmentPlan, type LiveFlags } from "./diff.js";
+import { checkSameFlags, type NamedFlagFile } from "./validate.js";
 
+// Reads every flag file and runs all offline checks: schema, one file per environment,
+// and the same flags in every file. Throws with every problem found.
 export async function readFlagFiles(dir: string): Promise<FlagFile[]> {
+  const named = await readNamedFlagFiles(dir);
+  const problems = checkSameFlags(named);
+  if (problems.length > 0) {
+    throw new Error(`Flag files don't agree:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
+  }
+  return named.map((n) => n.file);
+}
+
+async function readNamedFlagFiles(dir: string): Promise<NamedFlagFile[]> {
   let names: string[];
   try {
     names = (await readdir(dir)).filter((n) => /\.ya?ml$/i.test(n)).sort();
@@ -15,7 +27,7 @@ export async function readFlagFiles(dir: string): Promise<FlagFile[]> {
   }
   if (names.length === 0) throw new Error(`No .yaml files in "${dir}". Run "flagops pull" first.`);
 
-  const files: FlagFile[] = [];
+  const files: NamedFlagFile[] = [];
   const seen = new Map<string, string>();
   for (const name of names) {
     const file = parseFlagFile(await readFile(path.join(dir, name), "utf8"), name);
@@ -24,7 +36,7 @@ export async function readFlagFiles(dir: string): Promise<FlagFile[]> {
       throw new Error(`${name} and ${seen.get(key)} both describe environment "${file.environment}".`);
     }
     seen.set(key, name);
-    files.push(file);
+    files.push({ source: name, file });
   }
   return files;
 }

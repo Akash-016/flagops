@@ -17,7 +17,7 @@ import {
 } from "./diff.js";
 import { findReferences } from "./references.js";
 import { findStaleFlags, formatStale, formatStaleMarkdown } from "./stale.js";
-import { buildPlans } from "./state.js";
+import { buildPlans, readFlagFiles } from "./state.js";
 import { applyPlans } from "./apply.js";
 
 const program = new Command();
@@ -82,6 +82,16 @@ program
   });
 
 const collect = (value: string, previous: string[] = []) => [...previous, value];
+
+program
+  .command("validate")
+  .description("Check the flag files without connecting to Flagsmith (no API key needed)")
+  .option("-d, --dir <dir>", "folder with the flag files", "flags")
+  .action(async (opts: { dir: string }) => {
+    const files = await readFlagFiles(opts.dir);
+    const flags = new Set(files.flatMap((f) => Object.keys(f.flags))).size;
+    console.log(`OK: ${files.length} environment file${files.length === 1 ? "" : "s"}, ${flags} flag${flags === 1 ? "" : "s"} each.`);
+  });
 
 interface PlanOptions {
   project?: string;

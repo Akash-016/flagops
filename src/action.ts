@@ -13,7 +13,19 @@ function fail(message: string): never {
 }
 
 const command = input("COMMAND");
-if (!["plan", "apply", "drift"].includes(command)) fail(`command must be plan, apply or drift, got '${command}'`);
+if (!["validate", "plan", "apply", "drift"].includes(command)) {
+  fail(`command must be validate, plan, apply or drift, got '${command}'`);
+}
+
+const actionRoot = process.env.GITHUB_ACTION_PATH ?? path.resolve(path.dirname(process.argv[1]), "..");
+const cli = path.join(actionRoot, "dist", "cli.cjs");
+
+// validate works offline: no key, no URL, safe on pull requests from forks.
+if (command === "validate") {
+  const r = spawnSync(process.execPath, [cli, "validate", "--dir", input("DIR") || "flags"], { stdio: "inherit" });
+  process.exit(r.status ?? 1);
+}
+
 if (!process.env.FLAGSMITH_ADMIN_KEY?.trim()) {
   fail("admin-key is empty. Add a repository secret FLAGSMITH_ADMIN_KEY (Settings -> Secrets and variables -> Actions).");
 }
@@ -27,9 +39,6 @@ for (const env of input("ENVIRONMENTS").split(",").map((e) => e.trim()).filter(B
   args.push("--env", env);
 }
 
-// dist/cli.cjs inside the action's folder (GitHub sets GITHUB_ACTION_PATH).
-const actionRoot = process.env.GITHUB_ACTION_PATH ?? path.resolve(path.dirname(process.argv[1]), "..");
-const cli = path.join(actionRoot, "dist", "cli.cjs");
 const runnerTemp = process.env.RUNNER_TEMP ?? ".";
 const reportFile = path.join(runnerTemp, `flagops-${command}.md`);
 

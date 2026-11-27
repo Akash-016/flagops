@@ -7,14 +7,16 @@ branding:
 
 inputs:
   command:
-    description: "plan, apply or drift"
+    description: "validate, plan, apply or drift"
     required: true
   api-url:
-    description: "Flagsmith API URL, e.g. https://flagsmith.example.com/api/v1"
-    required: true
+    description: "Flagsmith API URL, e.g. https://flagsmith.example.com/api/v1 (not needed for validate)"
+    required: false
+    default: ""
   admin-key:
-    description: "Flagsmith Admin API key (store it as a secret)"
-    required: true
+    description: "Flagsmith Admin API key, stored as a secret (not needed for validate)"
+    required: false
+    default: ""
   project:
     description: "Flagsmith project id or name (only needed if there are several)"
     required: false

@@ -32,7 +32,15 @@ function fail(message) {
   process.exit(1);
 }
 var command = input("COMMAND");
-if (!["plan", "apply", "drift"].includes(command)) fail(`command must be plan, apply or drift, got '${command}'`);
+if (!["validate", "plan", "apply", "drift"].includes(command)) {
+  fail(`command must be validate, plan, apply or drift, got '${command}'`);
+}
+var actionRoot = process.env.GITHUB_ACTION_PATH ?? import_node_path.default.resolve(import_node_path.default.dirname(process.argv[1]), "..");
+var cli = import_node_path.default.join(actionRoot, "dist", "cli.cjs");
+if (command === "validate") {
+  const r = (0, import_node_child_process.spawnSync)(process.execPath, [cli, "validate", "--dir", input("DIR") || "flags"], { stdio: "inherit" });
+  process.exit(r.status ?? 1);
+}
 if (!process.env.FLAGSMITH_ADMIN_KEY?.trim()) {
   fail("admin-key is empty. Add a repository secret FLAGSMITH_ADMIN_KEY (Settings -> Secrets and variables -> Actions).");
 }
@@ -44,8 +52,6 @@ if (input("PROJECT")) args.push("--project", input("PROJECT"));
 for (const env of input("ENVIRONMENTS").split(",").map((e) => e.trim()).filter(Boolean)) {
   args.push("--env", env);
 }
-var actionRoot = process.env.GITHUB_ACTION_PATH ?? import_node_path.default.resolve(import_node_path.default.dirname(process.argv[1]), "..");
-var cli = import_node_path.default.join(actionRoot, "dist", "cli.cjs");
 var runnerTemp = process.env.RUNNER_TEMP ?? ".";
 var reportFile = import_node_path.default.join(runnerTemp, `flagops-${command}.md`);
 var extra = command === "apply" ? ["--yes"] : ["--format", "markdown", "--out", reportFile];

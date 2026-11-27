@@ -31132,7 +31132,34 @@ function formatStaleMarkdown(stale, days, refs) {
 // src/state.ts
 var import_promises2 = require("node:fs/promises");
 var import_node_path3 = __toESM(require("node:path"), 1);
+
+// src/validate.ts
+function checkSameFlags(files) {
+  if (files.length < 2) return [];
+  const all = new Set(files.flatMap((f) => Object.keys(f.file.flags)));
+  const problems = [];
+  for (const flag of [...all].sort()) {
+    const missing = files.filter((f) => !(flag in f.file.flags)).map((f) => f.source);
+    if (missing.length === 0) continue;
+    const present = files.filter((f) => flag in f.file.flags).map((f) => f.source);
+    problems.push(
+      `"${flag}" is in ${present.join(", ")} but missing from ${missing.join(", ")}. Flagsmith creates a flag in every environment, so add it there too (enabled: false to keep it off).`
+    );
+  }
+  return problems;
+}
+
+// src/state.ts
 async function readFlagFiles(dir) {
+  const named = await readNamedFlagFiles(dir);
+  const problems = checkSameFlags(named);
+  if (problems.length > 0) {
+    throw new Error(`Flag files don't agree:
+${problems.map((p) => `  - ${p}`).join("\n")}`);
+  }
+  return named.map((n) => n.file);
+}
+async function readNamedFlagFiles(dir) {
   let names;
   try {
     names = (await (0, import_promises2.readdir)(dir)).filter((n) => /\.ya?ml$/i.test(n)).sort();
@@ -31149,7 +31176,7 @@ async function readFlagFiles(dir) {
       throw new Error(`${name} and ${seen.get(key)} both describe environment "${file2.environment}".`);
     }
     seen.set(key, name);
-    files.push(file2);
+    files.push({ source: name, file: file2 });
   }
   return files;
 }
@@ -31268,6 +31295,11 @@ program2.command("pull").description("Export each environment's flags to <dir>/<
   }
 });
 var collect = (value, previous = []) => [...previous, value];
+program2.command("validate").description("Check the flag files without connecting to Flagsmith (no API key needed)").option("-d, --dir <dir>", "folder with the flag files", "flags").action(async (opts) => {
+  const files = await readFlagFiles(opts.dir);
+  const flags = new Set(files.flatMap((f) => Object.keys(f.flags))).size;
+  console.log(`OK: ${files.length} environment file${files.length === 1 ? "" : "s"}, ${flags} flag${flags === 1 ? "" : "s"} each.`);
+});
 program2.command("plan").description("Show what apply would change, without changing anything").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("-f, --format <format>", "text or markdown", "text").option("-o, --out <file>", "also write the plan to this file").option("--code <dir>", "folder to search for code that uses changed flags", ".").option("--no-code", "don't search the code").action(async (opts) => {
   if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
   const fs2 = client();
