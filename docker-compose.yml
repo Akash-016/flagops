@@ -4,7 +4,8 @@
 #
 #   docker compose up -d        then open http://localhost:8000
 #
-# Local demo settings only. Change the secrets before exposing this anywhere.
+# Pinned to the Flagsmith version FlagOps was tested with. Local demo settings only:
+# change the secrets before exposing this anywhere.
 
 x-flagsmith-env: &flagsmith-env
   DATABASE_URL: postgresql://postgres:password@postgres:5432/flagsmith
@@ -15,7 +16,6 @@ x-flagsmith-env: &flagsmith-env
   DJANGO_SECRET_KEY: change-me-local-demo-only
   WAREHOUSE_CREDENTIALS_SECRET: change-me-local-demo-only
   TASK_RUN_METHOD: TASK_PROCESSOR
-  EXPERIMENTATION_ENABLED: "true"
 
 volumes:
   pgdata:
@@ -37,7 +37,7 @@ services:
       start_period: 20s
 
   migrate-db:
-    image: docker.flagsmith.com/flagsmith/flagsmith:latest
+    image: docker.flagsmith.com/flagsmith/flagsmith:2.295.2
     command: [migrate]
     environment:
       <<: *flagsmith-env
@@ -48,7 +48,7 @@ services:
         condition: service_healthy
 
   flagsmith:
-    image: docker.flagsmith.com/flagsmith/flagsmith:latest
+    image: docker.flagsmith.com/flagsmith/flagsmith:2.295.2
     restart: unless-stopped
     command: [serve]
     environment:
@@ -60,7 +60,7 @@ services:
         condition: service_completed_successfully
 
   flagsmith-task-processor:
-    image: docker.flagsmith.com/flagsmith/flagsmith:latest
+    image: docker.flagsmith.com/flagsmith/flagsmith:2.295.2
     restart: unless-stopped
     command: [run-task-processor]
     environment:
