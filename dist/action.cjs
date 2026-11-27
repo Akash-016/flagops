@@ -27154,7 +27154,7 @@ var flagFileSchema = external_exports.strictObject({
 var MAX_FILE_BYTES = 1024 * 1024;
 
 // src/diff.ts
-var guardOutput = (s) => s.replace(/\r(?!\n)/g, "\\r").replace(/^(\s*)::/gm, "$1: :");
+var guardOutput = (s) => s.replace(/\r(?!\n)/g, "\\r").replace(/^(\s*)::/gm, "$1: :").replace(/##\[/g, "## [");
 
 // src/action.ts
 var input2 = (name) => (process.env[`INPUT_${name}`] ?? "").trim();

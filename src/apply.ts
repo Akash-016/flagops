@@ -1,12 +1,14 @@
 // Make the planned changes in Flagsmith.
 
-import { archiveConflicts, isAction, safe, type Change } from "./diff.js";
+import { archiveConflicts, isAction, safe, segmentProblems, type Change } from "./diff.js";
 import type { FlagsmithClient } from "./flagsmith.js";
 import type { PlannedEnvironment } from "./state.js";
 
 export interface ApplyResult {
   applied: string[];
   failed?: { what: string; error: string };
+  // Flags whose overrides were left alone because a segment name is missing or not unique.
+  skipped?: string[];
 }
 
 export async function applyPlans(
@@ -18,6 +20,11 @@ export async function applyPlans(
   // so change nothing until a person settles it.
   const conflicts = archiveConflicts(plans);
   if (conflicts.length > 0) throw new Error(conflicts.join("\n"));
+  // v2 feature versioning changes flags through versions, not the endpoints FlagOps uses.
+  const versioned = plans.filter((p) => p.env.use_v2_feature_versioning && p.changes.some(isAction)).map((p) => p.environment);
+  if (versioned.length > 0) {
+    throw new Error(`${versioned.join(", ")} uses feature versioning (v2), which FlagOps can't write to yet. Nothing changed. plan and drift still work.`);
+  }
 
   const applied: string[] = [];
   // A new flag is created once for the whole project, even if several environment files list it.
@@ -90,7 +97,8 @@ export async function applyPlans(
       }
     }
   }
-  return { applied };
+  const skipped = segmentProblems(plans);
+  return skipped.length > 0 ? { applied, skipped } : { applied };
 }
 
 function describeAction(c: Change): string {

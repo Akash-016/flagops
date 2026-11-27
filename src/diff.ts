@@ -16,7 +16,7 @@ export interface LiveOverride extends FlagSetting {
   stateId: number;
   featureSegmentId: number;
 }
-export type LiveFlag = FlagSetting & { stateId: number; featureId?: number; overrides?: LiveOverride[] };
+export type LiveFlag = FlagSetting & { stateId: number; featureId?: number; overrides?: LiveOverride[]; multivariate?: boolean };
 export type LiveFlags = Map<string, LiveFlag>;
 
 export type Change =
@@ -31,7 +31,10 @@ export type Change =
   // A segment override to add (before null), change, or remove (after null).
   | { kind: "override"; flag: string; segment: string; before: FlagSetting | null; after: FlagSetting | null; live?: LiveOverride }
   // The order of a flag's segment overrides (first match wins).
-  | { kind: "order"; flag: string; before: string[]; after: string[] };
+  | { kind: "order"; flag: string; before: string[]; after: string[] }
+  // YAML gives the flag an override for a segment name that matches no segment in Flagsmith
+  // (renamed or deleted in the dashboard), or several. Apply skips this flag's overrides here.
+  | { kind: "segment"; flag: string; segment: string; found: number };
 
 export interface EnvironmentPlan {
   environment: string;
@@ -42,9 +45,16 @@ const differ = (a: FlagSetting, b: FlagSetting) => a.enabled !== b.enabled || a.
 const settingOf = (s: FlagSetting): FlagSetting => ({ enabled: s.enabled, value: s.value });
 
 // Segment overrides of one flag, for a flag whose YAML lists "segments".
-function diffOverrides(flag: string, entry: FlagEntry, current: LiveFlag | undefined): Change[] {
+// segmentCount: how many segments in Flagsmith have each name YAML uses.
+function diffOverrides(flag: string, entry: FlagEntry, current: LiveFlag | undefined, segmentCount?: Map<string, number>): Change[] {
   const wanted = entry.segments ?? [];
   const live = current?.overrides ?? [];
+  // A name that doesn't pick out one segment: report it, and leave this flag's overrides
+  // alone until it's fixed, since the rest of the comparison would be guesswork.
+  const unclear = wanted.filter((w) => segmentCount && segmentCount.get(w.segment) !== 1);
+  if (unclear.length > 0) {
+    return unclear.map((w) => ({ kind: "segment", flag, segment: w.segment, found: segmentCount?.get(w.segment) ?? 0 }));
+  }
   const changes: Change[] = [];
   for (const w of wanted) {
     const l = live.find((o) => o.segment === w.segment);
@@ -66,7 +76,12 @@ function diffOverrides(flag: string, entry: FlagEntry, current: LiveFlag | undef
 }
 
 // archivedLive: lowercase names of flags archived in Flagsmith, when the source can tell.
-export function diffEnvironment(wanted: FlagFile, live: LiveFlags, archivedLive?: Set<string>): EnvironmentPlan {
+export function diffEnvironment(
+  wanted: FlagFile,
+  live: LiveFlags,
+  archivedLive?: Set<string>,
+  segmentCount?: Map<string, number>,
+): EnvironmentPlan {
   const changes: Change[] = [];
 
   for (const [flag, entry] of Object.entries(wanted.flags)) {
@@ -84,7 +99,8 @@ export function diffEnvironment(wanted: FlagFile, live: LiveFlags, archivedLive?
       changes.push({ kind: "update", flag, before, after, stateId: current.stateId });
     }
     // No "segments" key: the flag's overrides are left alone, as before FlagOps managed them.
-    if (entry.segments) changes.push(...diffOverrides(flag, entry, current));
+    // An archived flag missing from Flagsmith can't be created, so neither can its overrides.
+    if (entry.segments && (current || !isArchived(entry))) changes.push(...diffOverrides(flag, entry, current, segmentCount));
   }
 
   for (const [flag, current] of live) {
@@ -103,6 +119,22 @@ export const isAction = (c: Change) => c.kind === "update" || c.kind === "create
 // Changes that apply would actually make (the other kinds are only reported).
 export function countActions(plans: EnvironmentPlan[]): number {
   return plans.reduce((n, p) => n + p.changes.filter(isAction).length, 0);
+}
+
+// Overrides apply skips because their segment name is missing or not unique in Flagsmith.
+export function segmentProblems(plans: EnvironmentPlan[]): string[] {
+  const seen = new Set<string>();
+  for (const p of plans) {
+    for (const c of p.changes) {
+      if (c.kind !== "segment") continue;
+      seen.add(
+        c.found === 0
+          ? `"${c.flag}" in ${p.environment}: segment "${c.segment}" isn't in Flagsmith (renamed or deleted?). Its overrides were left alone. Fix the name in YAML or recreate the segment.`
+          : `"${c.flag}" in ${p.environment}: ${c.found} segments are named "${c.segment}". Its overrides were left alone. Rename the segments so each name is unique.`,
+      );
+    }
+  }
+  return [...seen];
 }
 
 // Flags archived on one side only: apply must not run until YAML and Flagsmith agree.
@@ -146,9 +178,11 @@ const show = (v: FlagValue) => (v === null ? "null" : JSON.stringify(v));
 export const safe = (s: string) => (/[\x00-\x1f\x7f\x85\u2028\u2029]/.test(s) ? JSON.stringify(s) : s);
 
 // Last line of defence for anything printed, error messages included: in a GitHub Actions
-// log a line starting with "::" is a workflow command, and a lone carriage return starts a
-// new line there. Names from Flagsmith can hold either.
-export const guardOutput = (s: string) => s.replace(/\r(?!\n)/g, "\\r").replace(/^(\s*)::/gm, "$1: :");
+// log a line starting with "::" is a workflow command, so is "##[" anywhere in a line (the
+// runner's older syntax), and a lone carriage return starts a new line. Names from Flagsmith
+// can hold any of these.
+export const guardOutput = (s: string) =>
+  s.replace(/\r(?!\n)/g, "\\r").replace(/^(\s*)::/gm, "$1: :").replace(/##\[/g, "## [");
 
 const setting = (s: FlagSetting) => `${s.enabled ? "on" : "off"}, value ${show(s.value)}`;
 
@@ -181,6 +215,8 @@ function describe(change: Change): string {
       if (!change.after) return `  - ${where}: override removed (was ${setting(change.before)})`;
       return `  ~ ${where}: ${setting(change.before)} -> ${setting(change.after)}`;
     }
+    case "segment":
+      return `  ! ${flag} [segment ${safe(change.segment)}]: ${change.found === 0 ? "no such segment in Flagsmith" : `${change.found} segments have this name`} (apply leaves this flag's overrides alone)`;
     case "order":
       return `  ~ ${flag}: segment order ${change.before.map(safe).join(", ")} -> ${change.after.map(safe).join(", ")}`;
   }
@@ -252,6 +288,8 @@ function planRow(c: Change): string {
     case "order": {
       return `| ~ | ${code(c.flag)} segment order | ${c.before.map(code).join(", ")} | **${c.after.map(code).join(", ")}** |`;
     }
+    case "segment":
+      return `| ! | ${code(c.flag)} for segment ${code(c.segment)} | ${c.found === 0 ? "no such segment in Flagsmith" : `${c.found} segments with this name`} | apply leaves this flag's overrides alone until fixed |`;
   }
 }
 
@@ -315,6 +353,10 @@ function describeDrift(c: Change): { git: string; live: string; what: string } {
     }
     case "order":
       return { git: `segments ${c.after.map(code).join(", ")}`, live: `segments ${c.before.map(code).join(", ")}`, what: "segment order changed outside Git" };
+    case "segment":
+      return c.found === 0
+        ? { git: `override for segment ${code(c.segment)}`, live: "no such segment", what: "segment renamed or deleted outside Git" }
+        : { git: `override for segment ${code(c.segment)}`, live: `${c.found} segments with this name`, what: "segment name no longer unique" };
   }
 }
 

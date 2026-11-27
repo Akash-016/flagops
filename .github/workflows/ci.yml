@@ -214,6 +214,16 @@ jobs:
           expect_exit 0 $cli drift
           expect_exit 0 $readonly_cli drift
 
+          echo "--- a segment renamed in the dashboard: drift (exit 2) in both modes, apply skips that flag and fails with the reason"
+          beta=$(curl -sf -H "$auth" "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/segments/" | jq -r '.results[] | select(.name=="beta_testers") | .id')
+          curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json" -d '{"name":"beta"}' "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/segments/$beta/" > /dev/null
+          $cli drift | tee drift.txt || true
+          grep -q "segment renamed or deleted outside Git" drift.txt
+          expect_exit 2 $readonly_cli drift
+          expect_exit 1 $cli apply --yes
+          curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json" -d '{"name":"beta_testers"}' "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/segments/$beta/" > /dev/null
+          expect_exit 0 $cli drift
+
           echo "--- pull writes the overrides back"
           $cli pull
           grep -A8 "  dark_mode:" flags/production.yaml | grep -q "segment: beta_testers"

@@ -12,12 +12,14 @@ export interface Environment {
   name: string;
   api_key: string;
   project: number;
+  use_v2_feature_versioning?: boolean; // Admin API only
 }
 
 export interface Feature {
   id: number;
   name: string;
   is_archived: boolean;
+  type?: string; // "STANDARD" or "MULTIVARIATE"
   tags?: number[];
   created_date?: string;
 }
@@ -41,7 +43,7 @@ export interface Tag {
 // Read-only: the Admin API rejects these keys, so plan and drift can run without the admin key.
 interface DocumentFeatureState {
   django_id: number;
-  feature: { id: number; name: string };
+  feature: { id: number; name: string; type?: string };
   enabled: boolean;
   feature_state_value: FlagValue;
   feature_segment: { priority: number | null } | null;
@@ -128,6 +130,16 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<Response>
   }
 }
 
+// A paging link, moved onto the configured Flagsmith: only its path and query are used, so
+// the admin key never goes to another host (a "//host" path would otherwise name one).
+export function sameOrigin(next: string, apiUrl: string): string {
+  const link = new URL(next);
+  const origin = new URL(apiUrl).origin;
+  const url = new URL(origin + link.pathname.replace(/^\/+/, "/") + link.search);
+  if (url.origin !== origin) throw new Error(`Flagsmith paging link points elsewhere: ${next}`);
+  return url.href;
+}
+
 // The start of an error response, without HTML: a 500 page is mostly markup.
 async function errorBody(res: Response): Promise<string> {
   const body = (await res.text())
@@ -142,7 +154,7 @@ export async function readEnvironmentDocument(apiUrl: string, serverKey: string)
   const res = await fetchWithRetry(`${apiUrl}/environment-document/`, { headers: { "X-Environment-Key": serverKey } });
   if (res.status === 401 || res.status === 403) {
     throw new Error(
-      `Flagsmith rejected an environment key starting "${serverKey.slice(0, 8)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`,
+      `Flagsmith rejected an environment key starting "${serverKey.slice(0, 4)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`,
     );
   }
   if (!res.ok) throw new Error(`Flagsmith GET ${apiUrl}/environment-document/ failed: ${res.status} ${await errorBody(res)}`);
@@ -187,7 +199,7 @@ export class FlagsmithClient {
       items.push(...page.results);
       // Only follow the path: the admin key must never go to another host, or over http
       // when a proxy makes Django build http:// links.
-      url = page.next && new URL(new URL(page.next).pathname + new URL(page.next).search, this.apiUrl).href;
+      url = page.next && sameOrigin(page.next, this.apiUrl);
     }
     return items;
   }

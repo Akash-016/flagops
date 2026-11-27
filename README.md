@@ -183,9 +183,9 @@ If a flag is archived on one side only (archived or unarchived in the dashboard,
         value: "v2"
 ```
 
-With a `segments` list, Git is the record: `apply` adds, changes, removes and reorders that flag's overrides to match, and `drift` reports any dashboard change to them. `segments: []` means no overrides. A flag with no `segments` key keeps whatever overrides it has in Flagsmith, so files written before FlagOps managed overrides change nothing; `flagops pull` writes the list for every flag. Overrides can differ between environments.
+With a `segments` list, Git is the record: `apply` adds, changes, removes and reorders that flag's overrides to match, and `drift` reports any dashboard change to them, including a segment renamed or deleted in the dashboard. If a segment name in YAML matches no segment, or several, `plan` and `drift` show it, and `apply` leaves that flag's overrides alone (applying everything else) and then fails with the reason. `segments: []` means no overrides. A flag with no `segments` key keeps whatever overrides it has in Flagsmith, so files written before FlagOps managed overrides change nothing; `flagops pull` writes the list for every flag. Overrides can differ between environments.
 
-If Flagsmith holds a flag whose name or value FlagOps can't write back unchanged (a name with a tab, say), `pull` leaves that flag out of every file, says why, and writes the rest. `plan` and `drift` leave such flags out too, since no flag file can hold them; rename them in Flagsmith to manage them.
+If Flagsmith holds a flag whose name or value FlagOps can't write back unchanged (a name with a tab, say), `pull` leaves that flag out of every file, says why, and writes the rest. `plan` and `drift` leave such flags out too, since no flag file can hold them; rename them in Flagsmith to manage them. If only a flag's overrides can't be written (one uses a segment name that several segments share), `pull` writes the flag without `segments`, so its overrides stay unmanaged, and says so.
 
 **Every file must list the same flags.** A Flagsmith flag always exists in every environment, so a new flag goes into each file (with `enabled: false` where it should stay off). If it's missing from one, every command stops and says which file to fix.
 
@@ -237,7 +237,8 @@ FlagOps makes Git the record of every flag change, and makes production changes 
 
 ## Limits
 
-- Segment rules, identity overrides and multivariate weights are not managed. FlagOps sets only on/off and value.
+- Segment rules, identity overrides and multivariate weights are not managed. For a multivariate flag FlagOps sets the control value, and the plan comment says that the variant weights still apply.
+- Environments that use feature versioning (v2) can be planned and checked for drift, but `apply` stops before changing anything there.
 - An override and its order are separate calls, so if `apply` stops halfway, a new override can briefly sit at the end of the list. Run `apply` again.
 - `apply` never deletes flags. Flags removed from YAML are reported as "left alone".
 - `apply` stops at the first failed change and lists what it did; there is no rollback. Run it again after fixing the cause.

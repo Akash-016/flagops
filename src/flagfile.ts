@@ -122,19 +122,28 @@ export function fileNameFor(environmentName: string): string {
 // so the same flags always produce the same file (clean diffs in pull requests).
 // overrides: each flag's segment overrides in priority order. When given, every flag gets a
 // "segments" list (empty if it has none), so FlagOps manages them all from then on.
+// segmentCount: how many segments have each name. A flag with an override for a segment whose
+// name isn't unique gets no "segments" list (and a dropSegments reason for pull to report).
 export function buildFlagFile(
   environmentName: string,
   features: Feature[],
   states: FeatureState[],
   overrides?: Map<string, SegmentOverride[]>,
-): FlagFile {
+  segmentCount?: Map<string, number>,
+): FlagFile & { flags: Record<string, FlagEntry & { dropSegments?: string }> } {
   const stateByFeature = new Map(states.map((s) => [s.feature, s]));
   const flags: FlagFile["flags"] = {};
   for (const f of [...features].sort((a, b) => a.name.localeCompare(b.name))) {
     const state = stateByFeature.get(f.id);
     if (!state) continue;
     const entry: FlagEntry = { enabled: state.enabled, value: state.feature_state_value ?? null };
-    if (overrides) entry.segments = (overrides.get(f.name) ?? []).map((o) => ({ segment: o.segment, enabled: o.enabled, value: o.value }));
+    const list = overrides?.get(f.name) ?? [];
+    const unclear = list.find((o) => (segmentCount?.get(o.segment) ?? 1) !== 1);
+    if (unclear) {
+      (entry as { dropSegments?: string }).dropSegments = `${segmentCount?.get(unclear.segment)} segments are named "${unclear.segment}"`;
+    } else if (overrides) {
+      entry.segments = list.map((o) => ({ segment: o.segment, enabled: o.enabled, value: o.value }));
+    }
     flags[f.name] = f.is_archived ? { archived: true, ...entry } : entry;
   }
   return { environment: environmentName, flags };

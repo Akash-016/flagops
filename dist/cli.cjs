@@ -10993,6 +10993,13 @@ async function fetchWithRetry(url2, init) {
     await new Promise((r) => setTimeout(r, wait));
   }
 }
+function sameOrigin(next, apiUrl) {
+  const link = new URL(next);
+  const origin = new URL(apiUrl).origin;
+  const url2 = new URL(origin + link.pathname.replace(/^\/+/, "/") + link.search);
+  if (url2.origin !== origin) throw new Error(`Flagsmith paging link points elsewhere: ${next}`);
+  return url2.href;
+}
 async function errorBody(res) {
   const body = (await res.text()).replace(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
   return body.length > 300 ? `${body.slice(0, 300)}...` : body;
@@ -11001,7 +11008,7 @@ async function readEnvironmentDocument(apiUrl, serverKey) {
   const res = await fetchWithRetry(`${apiUrl}/environment-document/`, { headers: { "X-Environment-Key": serverKey } });
   if (res.status === 401 || res.status === 403) {
     throw new Error(
-      `Flagsmith rejected an environment key starting "${serverKey.slice(0, 8)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`
+      `Flagsmith rejected an environment key starting "${serverKey.slice(0, 4)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`
     );
   }
   if (!res.ok) throw new Error(`Flagsmith GET ${apiUrl}/environment-document/ failed: ${res.status} ${await errorBody(res)}`);
@@ -11038,7 +11045,7 @@ var FlagsmithClient = class {
       seen.add(url2);
       const page = await this.request(url2);
       items.push(...page.results);
-      url2 = page.next && new URL(new URL(page.next).pathname + new URL(page.next).search, this.apiUrl).href;
+      url2 = page.next && sameOrigin(page.next, this.apiUrl);
     }
     return items;
   }
@@ -30909,14 +30916,20 @@ var flagFileSchema = external_exports.strictObject({
 function fileNameFor(environmentName) {
   return environmentName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".yaml";
 }
-function buildFlagFile(environmentName, features, states, overrides) {
+function buildFlagFile(environmentName, features, states, overrides, segmentCount) {
   const stateByFeature = new Map(states.map((s) => [s.feature, s]));
   const flags = {};
   for (const f of [...features].sort((a, b) => a.name.localeCompare(b.name))) {
     const state = stateByFeature.get(f.id);
     if (!state) continue;
     const entry = { enabled: state.enabled, value: state.feature_state_value ?? null };
-    if (overrides) entry.segments = (overrides.get(f.name) ?? []).map((o) => ({ segment: o.segment, enabled: o.enabled, value: o.value }));
+    const list = overrides?.get(f.name) ?? [];
+    const unclear = list.find((o) => (segmentCount?.get(o.segment) ?? 1) !== 1);
+    if (unclear) {
+      entry.dropSegments = `${segmentCount?.get(unclear.segment)} segments are named "${unclear.segment}"`;
+    } else if (overrides) {
+      entry.segments = list.map((o) => ({ segment: o.segment, enabled: o.enabled, value: o.value }));
+    }
     flags[f.name] = f.is_archived ? { archived: true, ...entry } : entry;
   }
   return { environment: environmentName, flags };
@@ -31040,9 +31053,13 @@ function formatReferences(refs, max = 5) {
 // src/diff.ts
 var differ = (a, b) => a.enabled !== b.enabled || a.value !== b.value;
 var settingOf = (s) => ({ enabled: s.enabled, value: s.value });
-function diffOverrides(flag, entry, current) {
+function diffOverrides(flag, entry, current, segmentCount) {
   const wanted = entry.segments ?? [];
   const live = current?.overrides ?? [];
+  const unclear = wanted.filter((w) => segmentCount && segmentCount.get(w.segment) !== 1);
+  if (unclear.length > 0) {
+    return unclear.map((w) => ({ kind: "segment", flag, segment: w.segment, found: segmentCount?.get(w.segment) ?? 0 }));
+  }
   const changes = [];
   for (const w of wanted) {
     const l = live.find((o) => o.segment === w.segment);
@@ -31061,7 +31078,7 @@ function diffOverrides(flag, entry, current) {
   }
   return changes;
 }
-function diffEnvironment(wanted, live, archivedLive) {
+function diffEnvironment(wanted, live, archivedLive, segmentCount) {
   const changes = [];
   for (const [flag, entry] of Object.entries(wanted.flags)) {
     const after = { enabled: entry.enabled, value: entry.value };
@@ -31075,7 +31092,7 @@ function diffEnvironment(wanted, live, archivedLive) {
     } else if (differ(before, after)) {
       changes.push({ kind: "update", flag, before, after, stateId: current.stateId });
     }
-    if (entry.segments) changes.push(...diffOverrides(flag, entry, current));
+    if (entry.segments && (current || !isArchived(entry))) changes.push(...diffOverrides(flag, entry, current, segmentCount));
   }
   for (const [flag, current] of live) {
     if (!(flag in wanted.flags) && !nameProblem(flag)) {
@@ -31088,6 +31105,18 @@ function diffEnvironment(wanted, live, archivedLive) {
 var isAction = (c) => c.kind === "update" || c.kind === "create" || c.kind === "override" || c.kind === "order";
 function countActions(plans) {
   return plans.reduce((n, p) => n + p.changes.filter(isAction).length, 0);
+}
+function segmentProblems(plans) {
+  const seen = /* @__PURE__ */ new Set();
+  for (const p of plans) {
+    for (const c of p.changes) {
+      if (c.kind !== "segment") continue;
+      seen.add(
+        c.found === 0 ? `"${c.flag}" in ${p.environment}: segment "${c.segment}" isn't in Flagsmith (renamed or deleted?). Its overrides were left alone. Fix the name in YAML or recreate the segment.` : `"${c.flag}" in ${p.environment}: ${c.found} segments are named "${c.segment}". Its overrides were left alone. Rename the segments so each name is unique.`
+      );
+    }
+  }
+  return [...seen];
 }
 function archiveConflicts(plans) {
   const seen = /* @__PURE__ */ new Map();
@@ -31116,7 +31145,7 @@ function sortByEnvironment(plans) {
 }
 var show = (v) => v === null ? "null" : JSON.stringify(v);
 var safe = (s) => /[\x00-\x1f\x7f\x85\u2028\u2029]/.test(s) ? JSON.stringify(s) : s;
-var guardOutput = (s) => s.replace(/\r(?!\n)/g, "\\r").replace(/^(\s*)::/gm, "$1: :");
+var guardOutput = (s) => s.replace(/\r(?!\n)/g, "\\r").replace(/^(\s*)::/gm, "$1: :").replace(/##\[/g, "## [");
 var setting = (s) => `${s.enabled ? "on" : "off"}, value ${show(s.value)}`;
 function describe3(change) {
   const flag = safe(change.flag);
@@ -31145,6 +31174,8 @@ function describe3(change) {
       if (!change.after) return `  - ${where}: override removed (was ${setting(change.before)})`;
       return `  ~ ${where}: ${setting(change.before)} -> ${setting(change.after)}`;
     }
+    case "segment":
+      return `  ! ${flag} [segment ${safe(change.segment)}]: ${change.found === 0 ? "no such segment in Flagsmith" : `${change.found} segments have this name`} (apply leaves this flag's overrides alone)`;
     case "order":
       return `  ~ ${flag}: segment order ${change.before.map(safe).join(", ")} -> ${change.after.map(safe).join(", ")}`;
   }
@@ -31199,6 +31230,8 @@ function planRow(c) {
     case "order": {
       return `| ~ | ${code(c.flag)} segment order | ${c.before.map(code).join(", ")} | **${c.after.map(code).join(", ")}** |`;
     }
+    case "segment":
+      return `| ! | ${code(c.flag)} for segment ${code(c.segment)} | ${c.found === 0 ? "no such segment in Flagsmith" : `${c.found} segments with this name`} | apply leaves this flag's overrides alone until fixed |`;
   }
 }
 function formatPlanMarkdown(plans, refs, notes = []) {
@@ -31249,6 +31282,8 @@ function describeDrift(c) {
     }
     case "order":
       return { git: `segments ${c.after.map(code).join(", ")}`, live: `segments ${c.before.map(code).join(", ")}`, what: "segment order changed outside Git" };
+    case "segment":
+      return c.found === 0 ? { git: `override for segment ${code(c.segment)}`, live: "no such segment", what: "segment renamed or deleted outside Git" } : { git: `override for segment ${code(c.segment)}`, live: `${c.found} segments with this name`, what: "segment name no longer unique" };
   }
 }
 function formatDriftMarkdown(plans) {
@@ -31442,10 +31477,11 @@ function adminSource(fs2, projectId) {
     async readLive(env) {
       features ??= fs2.listFeatures(projectId);
       const nameById = new Map((await features).map((f) => [f.id, f.name]));
+      const mv = new Set((await features).filter((f) => f.type === "MULTIVARIATE").map((f) => f.id));
       const live = /* @__PURE__ */ new Map();
       for (const s of await fs2.listEnvironmentStates(env.api_key)) {
         const name = nameById.get(s.feature);
-        if (name) live.set(name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.id, featureId: s.feature, overrides: [] });
+        if (name) live.set(name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.id, featureId: s.feature, overrides: [], multivariate: mv.has(s.feature) });
       }
       const overrides = await fs2.listOverrideStates(env.id);
       for (const featureId of new Set(overrides.map((o) => o.feature))) {
@@ -31473,7 +31509,14 @@ function liveFromDocument(doc) {
   const live = /* @__PURE__ */ new Map();
   for (const s of doc.feature_states) {
     if (s.feature_segment) continue;
-    live.set(s.feature.name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.django_id, featureId: s.feature.id, overrides: [] });
+    live.set(s.feature.name, {
+      enabled: s.enabled,
+      value: s.feature_state_value ?? null,
+      stateId: s.django_id,
+      featureId: s.feature.id,
+      overrides: [],
+      multivariate: s.feature.type === "MULTIVARIATE"
+    });
   }
   const found = /* @__PURE__ */ new Map();
   for (const seg of doc.project.segments ?? []) {
@@ -31514,6 +31557,12 @@ async function buildPlans(source, dir, onlyEnvs) {
   }
   const archivedNames = await source.archived?.();
   const archived = archivedNames && new Set(archivedNames.map((n) => n.toLowerCase()));
+  const used = new Set(files.flatMap((f) => Object.values(f.flags).flatMap((e) => (e.segments ?? []).map((o) => o.segment))));
+  let segmentCount;
+  if (used.size > 0) {
+    const names = await source.segmentNames();
+    segmentCount = new Map([...used].map((name) => [name, names.filter((n) => n === name).length]));
+  }
   const plans = [];
   for (const file2 of files) {
     const env = environments.find((e) => e.name.toLowerCase() === file2.environment.toLowerCase());
@@ -31524,22 +31573,14 @@ async function buildPlans(source, dir, onlyEnvs) {
     }
     const live = await source.readLive(env);
     plans.push({
-      ...diffEnvironment(file2, live, archived),
+      ...diffEnvironment(file2, live, archived, segmentCount),
       env,
+      multivariate: new Set([...live].filter(([, l]) => l.multivariate).map(([name]) => name)),
       featureIds: new Map([...live].flatMap(([name, l]) => l.featureId === void 0 ? [] : [[name, l.featureId]])),
       segmentOrder: new Map(Object.entries(file2.flags).flatMap(([name, e]) => e.segments ? [[name, e.segments.map((o) => o.segment)]] : []))
     });
   }
   const problems = [];
-  const used = new Set(files.flatMap((f) => Object.values(f.flags).flatMap((e) => (e.segments ?? []).map((o) => o.segment))));
-  if (used.size > 0) {
-    const names = await source.segmentNames();
-    for (const name of [...used].sort()) {
-      const n = names.filter((s) => s === name).length;
-      if (n === 0) problems.push(`Segment "${name}" isn't in Flagsmith. Create it there first (FlagOps manages overrides, not segment rules).`);
-      if (n > 1) problems.push(`${n} segments in Flagsmith are named "${name}". Rename them so each name is unique.`);
-    }
-  }
   for (const p of plans) {
     const liveNames = new Map(
       p.changes.filter((c) => c.kind === "untracked").map((c) => [c.flag.toLowerCase(), c.flag])
@@ -31557,6 +31598,10 @@ async function buildPlans(source, dir, onlyEnvs) {
 async function applyPlans(fs2, projectId, plans) {
   const conflicts = archiveConflicts(plans);
   if (conflicts.length > 0) throw new Error(conflicts.join("\n"));
+  const versioned = plans.filter((p) => p.env.use_v2_feature_versioning && p.changes.some(isAction)).map((p) => p.environment);
+  if (versioned.length > 0) {
+    throw new Error(`${versioned.join(", ")} uses feature versioning (v2), which FlagOps can't write to yet. Nothing changed. plan and drift still work.`);
+  }
   const applied = [];
   const created = /* @__PURE__ */ new Map();
   let segmentIds;
@@ -31623,7 +31668,8 @@ async function applyPlans(fs2, projectId, plans) {
       }
     }
   }
-  return { applied };
+  const skipped = segmentProblems(plans);
+  return skipped.length > 0 ? { applied, skipped } : { applied };
 }
 function describeAction(c) {
   if (c.kind === "override") {
@@ -31672,25 +31718,39 @@ program2.command("pull").description("Export each environment's flags to <dir>/<
   ]);
   console.log(`Project ${project.name}: ${features.length} flags, ${environments.length} environments`);
   const source = adminSource(fs2, project.id);
+  const names = await source.segmentNames();
+  const segmentCount = new Map(names.map((n) => [n, names.filter((m) => m === n).length]));
   const files = [];
   for (const env of environments) {
     const target = import_node_path4.default.join(opts.dir, fileNameFor(env.name));
     const other = files.find((f) => f.target === target);
     if (other) throw new Error(`Environments "${other.file.environment}" and "${env.name}" would both be written to ${target}. Rename one in Flagsmith.`);
     const live = await source.readLive(env);
+    const states = [...live].map(([, l]) => ({ id: l.stateId, feature: l.featureId, enabled: l.enabled, feature_state_value: l.value, identity: null, feature_segment: null }));
     const overrides = new Map([...live].map(([name, l]) => [name, l.overrides ?? []]));
-    files.push({ target, file: buildFlagFile(env.name, features, await fs2.listEnvironmentStates(env.api_key), overrides) });
+    files.push({ target, file: buildFlagFile(env.name, features, states, overrides, segmentCount) });
   }
   const skipped = /* @__PURE__ */ new Map();
+  const noOverrides = /* @__PURE__ */ new Map();
+  for (const { file: file2 } of files) {
+    for (const [name, entry] of Object.entries(file2.flags)) {
+      if (entry.dropSegments) noOverrides.set(name, entry.dropSegments);
+      delete entry.dropSegments;
+    }
+  }
   for (const { file: file2 } of files) {
     const result = flagFileSchema.safeParse(file2);
     for (const issue2 of result.success ? [] : result.error.issues) {
       const name = issue2.path[0] === "flags" && typeof issue2.path[1] === "string" ? issue2.path[1] : void 0;
       if (name === void 0) throw new Error(`Environment "${file2.environment}": ${issue2.message}`);
-      if (!skipped.has(name)) skipped.set(name, issue2.message);
+      if (issue2.path[2] === "segments") noOverrides.set(name, issue2.message);
+      else if (!skipped.has(name)) skipped.set(name, issue2.message);
     }
   }
-  for (const { file: file2 } of files) for (const name of skipped.keys()) delete file2.flags[name];
+  for (const { file: file2 } of files) {
+    for (const name of skipped.keys()) delete file2.flags[name];
+    for (const name of noOverrides.keys()) if (file2.flags[name]) delete file2.flags[name].segments;
+  }
   await (0, import_promises3.mkdir)(opts.dir, { recursive: true });
   for (const { target, file: file2 } of files) {
     await (0, import_promises3.writeFile)(target, toYaml(file2), "utf8");
@@ -31698,6 +31758,9 @@ program2.command("pull").description("Export each environment's flags to <dir>/<
   }
   for (const [name, reason] of skipped) {
     console.error(`  skipped ${JSON.stringify(name)}: ${reason}. Rename or fix it in Flagsmith to manage it here.`);
+  }
+  for (const [name, reason] of noOverrides) {
+    console.error(`  ${JSON.stringify(name)}: segment overrides left out (${reason}); the flag's own settings were written, and its overrides stay unmanaged until that is fixed.`);
   }
 });
 var collect = (value, previous = []) => [...previous, value];
@@ -31718,6 +31781,11 @@ program2.command("plan").description("Show what apply would change, without chan
   const plans = await buildPlans(source, opts.dir, opts.env);
   const refs = opts.code === false ? void 0 : await findReferences(opts.code, changedFlags(plans), [opts.dir]);
   const notes = source.archived ? [] : ["Planned with read-only keys, which can't see whether a flag is archived. Apply checks that with the admin key and stops, changing nothing, if YAML and Flagsmith disagree."];
+  const changed = new Set(changedFlags(plans));
+  const mv = [...new Set(plans.flatMap((p) => [...p.multivariate].filter((f) => changed.has(f))))].sort();
+  if (mv.length > 0) {
+    notes.push(`Multivariate: ${mv.join(", ")}. FlagOps sets the control value; the variant weights stay as set in Flagsmith, so some users get a variant instead.`);
+  }
   const output2 = opts.format === "markdown" ? formatPlanMarkdown(plans, refs, notes) : formatPlan(plans, refs);
   console.log(output2);
   if (opts.out) await (0, import_promises3.writeFile)(opts.out, output2, "utf8");
@@ -31761,7 +31829,12 @@ Apply stopped; nothing changed:
 ${conflicts.join("\n")}`);
   }
   console.log(formatPlan(plans));
-  if (countActions(plans) === 0) return;
+  if (countActions(plans) === 0) {
+    const skipped = segmentProblems(plans);
+    if (skipped.length > 0) throw new Error(`Skipped, fix and run again:
+${skipped.map((s) => `  ${s}`).join("\n")}`);
+    return;
+  }
   if (!opts.yes) {
     if (!process.stdin.isTTY) throw new Error("Not asking for confirmation without a terminal. Use --yes.");
     const rl = (0, import_promises4.createInterface)({ input: process.stdin, output: process.stdout });
@@ -31784,6 +31857,12 @@ Stopped after ${result.applied.length} change(s). Run "flagops plan" to see what
   }
   console.log(`
 Applied ${result.applied.length} change(s).`);
+  if (result.skipped) {
+    console.error(`
+Skipped, fix and run again:
+${result.skipped.map((s) => `  ${s}`).join("\n")}`);
+    process.exit(1);
+  }
 });
 program2.parseAsync().catch((err) => {
   console.error(err.message);

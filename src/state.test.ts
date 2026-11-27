@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildPlans, liveFromDocument, type LiveSource } from "./state.js";
 import type { EnvironmentDocument, FlagsmithClient } from "./flagsmith.js";
-import { archiveConflicts, countActions, countDrift, formatDrift } from "./diff.js";
+import { archiveConflicts, countActions, countDrift, formatDrift, segmentProblems } from "./diff.js";
 import { applyPlans } from "./apply.js";
 
 const doc: EnvironmentDocument = {
@@ -35,7 +35,7 @@ describe("liveFromDocument", () => {
       ["staff", true, null],
       ["beta", false, 3],
     ]);
-    expect(live.get("dark_mode")).toEqual({ enabled: false, value: null, stateId: 11, featureId: 2, overrides: [] });
+    expect(live.get("dark_mode")).toEqual({ enabled: false, value: null, stateId: 11, featureId: 2, overrides: [], multivariate: false });
   });
 });
 
@@ -109,7 +109,7 @@ describe("buildPlans", () => {
     await expect(buildPlans(source({ dark_mode: true }), dir)).rejects.toThrow(/differs only in case from "dark_mode"/);
   });
 
-  it("stops when YAML names a segment that's missing or not unique in Flagsmith", async () => {
+  it("reports a segment name that's missing or not unique as drift, and leaves that flag's overrides alone", async () => {
     const dir = await flagsDir([]);
     const seg = (name: string) => `environment: Production
 flags:
@@ -122,9 +122,13 @@ flags:
         value: null
 `;
     await writeFile(path.join(dir, "production.yaml"), seg("nope"));
-    await expect(buildPlans(source({ a: true }), dir)).rejects.toThrow(/Segment "nope" isn't in Flagsmith/);
+    const [missing] = await buildPlans(source({ a: true }), dir);
+    expect(missing.changes).toEqual([{ kind: "segment", flag: "a", segment: "nope", found: 0 }]);
+    expect(countDrift([missing])).toBe(1);
+    expect(countActions([missing])).toBe(0);
+    expect(segmentProblems([missing])[0]).toContain("segment \"nope\" isn't in Flagsmith (renamed or deleted?)");
     await writeFile(path.join(dir, "production.yaml"), seg("twice"));
-    await expect(buildPlans(source({ a: true }), dir)).rejects.toThrow(/2 segments in Flagsmith are named "twice"/);
+    expect((await buildPlans(source({ a: true }), dir))[0].changes).toEqual([{ kind: "segment", flag: "a", segment: "twice", found: 2 }]);
     await writeFile(path.join(dir, "production.yaml"), seg("beta"));
     const [plan] = await buildPlans(source({ a: true }), dir);
     expect(plan.changes).toMatchObject([{ kind: "override", flag: "a", segment: "beta", before: null }]);

@@ -120,6 +120,12 @@ describe("parseFlagFile", () => {
     expect(parseFlagFile(toYaml(file), "dev.yaml")).toEqual(file);
   });
 
+  it("keeps a flag but leaves its overrides out when a segment name isn't unique", () => {
+    const file = buildFlagFile("Dev", [feature(1, "a")], [state(1, true)], new Map([["a", [{ segment: "staff", enabled: false, value: 1 }]]]), new Map([["staff", 2]]));
+    expect(file.flags.a).toMatchObject({ enabled: true, value: null, dropSegments: '2 segments are named "staff"' });
+    expect(file.flags.a.segments).toBeUndefined();
+  });
+
   it("explains what is wrong with a bad file", () => {
     expect(() => parseFlagFile("environment: Dev\nflags:\n  a:\n    enabled: maybe\n", "dev.yaml")).toThrow(
       /flags\.a\.enabled/,
