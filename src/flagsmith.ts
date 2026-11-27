@@ -53,25 +53,38 @@ export interface EnvironmentDocument {
   }[];
 }
 
-// A Flagsmith that never answers should fail the run, not hang it.
-const TIMEOUT_MS = 30_000;
+// A Flagsmith that never answers should fail the run, not hang it. FLAGSMITH_TIMEOUT
+// (seconds) raises the limit for a slow or very large instance.
+const TIMEOUT_MS = (Number(process.env.FLAGSMITH_TIMEOUT) || 30) * 1000;
 
 // GETs are safe to repeat, so a slow or briefly failing Flagsmith gets two more tries.
-// Writes are never retried: a PATCH that timed out may still have happened.
+// Writes are not retried after a timeout or 5xx: the change may still have happened.
+// A 429 (rate limited) means nothing happened, so any request waits and tries again.
 async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
   const method = init.method ?? "GET";
   for (let attempt = 1; ; attempt++) {
+    let wait = attempt * 2000;
     try {
       const res = await fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
-      if (method !== "GET" || res.status < 500 || attempt === 3) return res;
+      if (res.status === 429 && attempt < 3) {
+        wait = Math.min(Number(res.headers.get("retry-after")) || attempt * 2, 30) * 1000;
+      } else if (method !== "GET" || res.status < 500 || attempt === 3) {
+        return res;
+      }
     } catch (err) {
       if (method !== "GET" || attempt === 3) {
         const reason = (err as Error).name === "TimeoutError" ? `no answer in ${TIMEOUT_MS / 1000} s` : (err as Error).message;
         throw new Error(`Flagsmith ${method} ${url} failed: ${reason}`);
       }
     }
-    await new Promise((r) => setTimeout(r, attempt * 2000));
+    await new Promise((r) => setTimeout(r, wait));
   }
+}
+
+// The start of an error response, without HTML: a 500 page is mostly markup.
+async function errorBody(res: Response): Promise<string> {
+  const body = (await res.text()).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  return body.length > 300 ? `${body.slice(0, 300)}...` : body;
 }
 
 export async function readEnvironmentDocument(apiUrl: string, serverKey: string): Promise<EnvironmentDocument> {
@@ -81,7 +94,7 @@ export async function readEnvironmentDocument(apiUrl: string, serverKey: string)
       `Flagsmith rejected an environment key starting "${serverKey.slice(0, 8)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`,
     );
   }
-  if (!res.ok) throw new Error(`Flagsmith GET ${apiUrl}/environment-document/ failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw new Error(`Flagsmith GET ${apiUrl}/environment-document/ failed: ${res.status} ${await errorBody(res)}`);
   return (await res.json()) as EnvironmentDocument;
 }
 
@@ -106,7 +119,7 @@ export class FlagsmithClient {
       },
     });
     if (!res.ok) {
-      throw new Error(`Flagsmith ${init.method ?? "GET"} ${url} failed: ${res.status} ${await res.text()}`);
+      throw new Error(`Flagsmith ${init.method ?? "GET"} ${url} failed: ${res.status} ${await errorBody(res)}`);
     }
     return (await res.json()) as T;
   }
@@ -115,7 +128,10 @@ export class FlagsmithClient {
   private async getAll<T>(path: string): Promise<T[]> {
     const items: T[] = [];
     let url: string | null = this.apiUrl + path;
+    const seen = new Set<string>();
     while (url) {
+      if (seen.has(url)) throw new Error(`Flagsmith paging loops back to ${url}`);
+      seen.add(url);
       const page: Page<T> = await this.request<Page<T>>(url);
       items.push(...page.results);
       url = page.next;

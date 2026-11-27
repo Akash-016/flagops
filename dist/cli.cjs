@@ -10961,21 +10961,30 @@ function getEnvironmentKeys() {
 }
 
 // src/flagsmith.ts
-var TIMEOUT_MS = 3e4;
+var TIMEOUT_MS = (Number(process.env.FLAGSMITH_TIMEOUT) || 30) * 1e3;
 async function fetchWithRetry(url2, init) {
   const method = init.method ?? "GET";
   for (let attempt = 1; ; attempt++) {
+    let wait = attempt * 2e3;
     try {
       const res = await fetch(url2, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
-      if (method !== "GET" || res.status < 500 || attempt === 3) return res;
+      if (res.status === 429 && attempt < 3) {
+        wait = Math.min(Number(res.headers.get("retry-after")) || attempt * 2, 30) * 1e3;
+      } else if (method !== "GET" || res.status < 500 || attempt === 3) {
+        return res;
+      }
     } catch (err) {
       if (method !== "GET" || attempt === 3) {
         const reason = err.name === "TimeoutError" ? `no answer in ${TIMEOUT_MS / 1e3} s` : err.message;
         throw new Error(`Flagsmith ${method} ${url2} failed: ${reason}`);
       }
     }
-    await new Promise((r) => setTimeout(r, attempt * 2e3));
+    await new Promise((r) => setTimeout(r, wait));
   }
+}
+async function errorBody(res) {
+  const body = (await res.text()).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  return body.length > 300 ? `${body.slice(0, 300)}...` : body;
 }
 async function readEnvironmentDocument(apiUrl, serverKey) {
   const res = await fetchWithRetry(`${apiUrl}/environment-document/`, { headers: { "X-Environment-Key": serverKey } });
@@ -10984,7 +10993,7 @@ async function readEnvironmentDocument(apiUrl, serverKey) {
       `Flagsmith rejected an environment key starting "${serverKey.slice(0, 8)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`
     );
   }
-  if (!res.ok) throw new Error(`Flagsmith GET ${apiUrl}/environment-document/ failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw new Error(`Flagsmith GET ${apiUrl}/environment-document/ failed: ${res.status} ${await errorBody(res)}`);
   return await res.json();
 }
 var FlagsmithClient = class {
@@ -11004,7 +11013,7 @@ var FlagsmithClient = class {
       }
     });
     if (!res.ok) {
-      throw new Error(`Flagsmith ${init.method ?? "GET"} ${url2} failed: ${res.status} ${await res.text()}`);
+      throw new Error(`Flagsmith ${init.method ?? "GET"} ${url2} failed: ${res.status} ${await errorBody(res)}`);
     }
     return await res.json();
   }
@@ -11012,7 +11021,10 @@ var FlagsmithClient = class {
   async getAll(path5) {
     const items = [];
     let url2 = this.apiUrl + path5;
+    const seen = /* @__PURE__ */ new Set();
     while (url2) {
+      if (seen.has(url2)) throw new Error(`Flagsmith paging loops back to ${url2}`);
+      seen.add(url2);
       const page = await this.request(url2);
       items.push(...page.results);
       url2 = page.next;
@@ -30776,7 +30788,8 @@ function date4(params) {
 var import_yaml = __toESM(require_dist2(), 1);
 var MAX_INT = 2147483647;
 var MAX_TEXT = 2e4;
-var EDGE_SPACE = /^[\s\x1c-\x1f\x85]|[\s\x1c-\x1f\x85]$/;
+var MAX_NAME = 2e3;
+var EDGE_SPACE = /^[\t\n\v\f\r \x1c-\x1f\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]|[\t\n\v\f\r \x1c-\x1f\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]$/;
 var flagValue = external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean(), external_exports.null()], { error: "expected text, a number, true/false or null" }).superRefine((v, ctx) => {
   const problem = (message) => ctx.addIssue({ code: "custom", message });
   if (typeof v === "number") {
@@ -30788,31 +30801,30 @@ var flagValue = external_exports.union([external_exports.string(), external_expo
   }
 });
 var flagSchema = external_exports.strictObject({
+  archived: external_exports.literal(true).optional(),
   enabled: external_exports.boolean().optional(),
-  value: flagValue.optional(),
-  archived: external_exports.literal(true).optional()
+  value: flagValue.optional()
 }).superRefine((f, ctx) => {
-  if (f.archived) {
-    if (f.enabled !== void 0 || f.value !== void 0) {
-      ctx.addIssue({ code: "custom", message: "an archived flag has no settings; remove enabled and value" });
-    }
-    return;
-  }
   if (f.enabled === void 0) ctx.addIssue({ code: "custom", path: ["enabled"], message: "missing (true or false)" });
   if (f.value === void 0) {
     ctx.addIssue({ code: "custom", path: ["value"], message: "missing (write value: null if the flag has no value)" });
   }
-}).transform((f) => f.archived ? { archived: true } : { enabled: f.enabled, value: f.value });
-var isArchived = (f) => "archived" in f;
+}).transform((f) => f.archived ? { archived: true, enabled: f.enabled, value: f.value } : { enabled: f.enabled, value: f.value });
+var isArchived = (f) => f.archived === true;
 var BAD_NAME = /[\x00-\x1f\x7f]/;
+function nameProblem(name) {
+  if (name === "" || BAD_NAME.test(name)) return "flag names can't be empty or contain control characters";
+  if (EDGE_SPACE.test(name)) return "Flagsmith trims leading and trailing spaces from flag names; remove them";
+  if ([...name].length > MAX_NAME) return `flag names can be at most ${MAX_NAME} characters`;
+  return void 0;
+}
 var flagFileSchema = external_exports.strictObject({
   environment: external_exports.string().min(1),
   flags: external_exports.record(external_exports.string(), flagSchema).default({}).superRefine((flags, ctx) => {
     const seen = /* @__PURE__ */ new Map();
     for (const name of Object.keys(flags)) {
-      if (name === "" || BAD_NAME.test(name)) {
-        ctx.addIssue({ code: "custom", path: [name], message: "flag names can't be empty or contain control characters" });
-      }
+      const problem = nameProblem(name);
+      if (problem) ctx.addIssue({ code: "custom", path: [name], message: problem });
       const other = seen.get(name.toLowerCase());
       if (other) ctx.addIssue({ code: "custom", path: [name], message: `same as "${other}" except for case; Flagsmith treats them as one flag` });
       seen.set(name.toLowerCase(), name);
@@ -30826,13 +30838,10 @@ function buildFlagFile(environmentName, features, states) {
   const stateByFeature = new Map(states.map((s) => [s.feature, s]));
   const flags = {};
   for (const f of [...features].sort((a, b) => a.name.localeCompare(b.name))) {
-    if (f.is_archived) {
-      flags[f.name] = { archived: true };
-      continue;
-    }
     const state = stateByFeature.get(f.id);
     if (!state) continue;
-    flags[f.name] = { enabled: state.enabled, value: state.feature_state_value ?? null };
+    const setting2 = { enabled: state.enabled, value: state.feature_state_value ?? null };
+    flags[f.name] = f.is_archived ? { archived: true, ...setting2 } : setting2;
   }
   return { environment: environmentName, flags };
 }
@@ -30947,21 +30956,21 @@ function formatReferences(refs, max = 5) {
 }
 
 // src/diff.ts
-function diffEnvironment(wanted, live) {
+var differ = (a, b) => a.enabled !== b.enabled || a.value !== b.value;
+function diffEnvironment(wanted, live, archivedLive) {
   const changes = [];
-  for (const [flag, after] of Object.entries(wanted.flags)) {
-    if (isArchived(after)) continue;
+  for (const [flag, entry] of Object.entries(wanted.flags)) {
+    const after = { enabled: entry.enabled, value: entry.value };
     const current = live.get(flag);
-    if (!current) {
+    const before = current ? { enabled: current.enabled, value: current.value } : null;
+    if (current && archivedLive && isArchived(entry) !== archivedLive.has(flag.toLowerCase())) {
+      changes.push({ kind: "status", flag, archivedInGit: isArchived(entry) });
+    } else if (isArchived(entry)) {
+      if (!before || differ(before, after)) changes.push({ kind: "archived", flag, before, after });
+    } else if (!current || !before) {
       changes.push({ kind: "create", flag, after });
-    } else if (current.enabled !== after.enabled || current.value !== after.value) {
-      changes.push({
-        kind: "update",
-        flag,
-        before: { enabled: current.enabled, value: current.value },
-        after,
-        stateId: current.stateId
-      });
+    } else if (differ(before, after)) {
+      changes.push({ kind: "update", flag, before, after, stateId: current.stateId });
     }
   }
   for (const [flag, current] of live) {
@@ -30972,8 +30981,22 @@ function diffEnvironment(wanted, live) {
   changes.sort((a, b) => a.flag.localeCompare(b.flag));
   return { environment: wanted.environment, changes };
 }
+var isAction = (c) => c.kind === "update" || c.kind === "create";
 function countActions(plans) {
-  return plans.reduce((n, p) => n + p.changes.filter((c) => c.kind !== "untracked").length, 0);
+  return plans.reduce((n, p) => n + p.changes.filter(isAction).length, 0);
+}
+function archiveConflicts(plans) {
+  const seen = /* @__PURE__ */ new Map();
+  for (const p of plans) {
+    for (const c of p.changes) {
+      if (c.kind !== "status" || seen.has(c.flag)) continue;
+      seen.set(
+        c.flag,
+        c.archivedInGit ? `"${c.flag}" is marked archived in YAML but isn't archived in Flagsmith. Archive it there, or remove "archived: true" from it in every flag file.` : `"${c.flag}" is archived in Flagsmith. Add "archived: true" to it in every flag file (flagops pull writes this), or unarchive it.`
+      );
+    }
+  }
+  return [...seen.values()];
 }
 var changesLabel = (n) => `${n} change${n === 1 ? "" : "s"}`;
 function environmentRank(name) {
@@ -30988,7 +31011,10 @@ function sortByEnvironment(plans) {
   );
 }
 var show = (v) => v === null ? "null" : JSON.stringify(v);
+var safe = (s) => /[\x00-\x1f\x7f\x85\u2028\u2029]/.test(s) ? JSON.stringify(s) : s;
+var setting = (s) => `${s.enabled ? "on" : "off"}, value ${show(s.value)}`;
 function describe3(change) {
+  const flag = safe(change.flag);
   switch (change.kind) {
     case "update": {
       const parts = [];
@@ -30998,25 +31024,30 @@ function describe3(change) {
       if (change.before.value !== change.after.value) {
         parts.push(`value ${show(change.before.value)} -> ${show(change.after.value)}`);
       }
-      return `  ~ ${change.flag}: ${parts.join(", ")}`;
+      return `  ~ ${flag}: ${parts.join(", ")}`;
     }
     case "create":
-      return `  + ${change.flag}: new flag (${change.after.enabled ? "on" : "off"}, value ${show(change.after.value)})`;
+      return `  + ${flag}: new flag (${setting(change.after)})`;
     case "untracked":
-      return `  ! ${change.flag}: in Flagsmith but not in YAML (left alone)`;
+      return `  ! ${flag}: in Flagsmith but not in YAML (left alone)`;
+    case "archived":
+      return change.before ? `  ! ${flag}: archived; Flagsmith has ${setting(change.before)}, YAML says ${setting(change.after)} (apply leaves archived flags alone)` : `  ! ${flag}: archived in YAML but missing from Flagsmith`;
+    case "status":
+      return change.archivedInGit ? `  ! ${flag}: archived in YAML but not in Flagsmith (apply stops until they agree)` : `  ! ${flag}: archived in Flagsmith but not in YAML (apply stops until they agree)`;
   }
 }
 var COMMENT_MARKER = "<!-- flagops-plan -->";
 function text(s) {
-  return s.replace(/[^A-Za-z0-9 _.,:/=?+%-]/g, (c) => `&#${c.codePointAt(0)};`);
+  return s.replace(/[^A-Za-z0-9 ,/=?+%-]/g, (c) => `&#${c.codePointAt(0)};${c === "@" ? "<wbr>" : ""}`);
 }
 var code = (s) => `<code>${text(s)}</code>`;
-var plain = (s) => s.replace(/<\/?code>/g, "").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
+var plain = (s) => s.replace(/<\/?code>|<wbr>/g, "").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
 var cell = (v) => code(show(v));
 var onOff = (enabled) => enabled ? "on" : "off";
+var both = (s) => `${onOff(s.enabled)}, ${cell(s.value)}`;
 function changedFlags(plans) {
   const names = /* @__PURE__ */ new Set();
-  for (const p of plans) for (const c of p.changes) if (c.kind !== "untracked") names.add(c.flag);
+  for (const p of plans) for (const c of p.changes) if (isAction(c)) names.add(c.flag);
   return [...names].sort();
 }
 function referencesMarkdown(plans, refs) {
@@ -31036,27 +31067,38 @@ function referencesMarkdown(plans, refs) {
   return lines;
 }
 var productionNames = ["production"];
-function formatPlanMarkdown(plans, refs) {
+function planRow(c) {
+  switch (c.kind) {
+    case "update":
+      return `| ~ | ${code(c.flag)} | ${both(c.before)} | **${both(c.after)}** |`;
+    case "create":
+      return `| + | ${code(c.flag)} | (new flag) | **${both(c.after)}** |`;
+    case "untracked":
+      return `| ! | ${code(c.flag)} | ${both(c.before)} | not in YAML, left alone |`;
+    case "archived":
+      return `| ! | ${code(c.flag)} | ${c.before ? both(c.before) : "(missing)"} | ${both(c.after)}: archived, left alone |`;
+    case "status":
+      return c.archivedInGit ? `| ! | ${code(c.flag)} | not archived | archived in YAML: **apply stops** until they agree |` : `| ! | ${code(c.flag)} | archived | not archived in YAML: **apply stops** until they agree |`;
+  }
+}
+function formatPlanMarkdown(plans, refs, notes = []) {
   const actions = countActions(plans);
   const lines = [COMMENT_MARKER, "## FlagOps plan", ""];
   lines.push(actions === 0 ? "No flag changes." : `**${changesLabel(actions)}** will be applied when this is merged.`);
+  const changed = plans.filter((p) => p.changes.some(isAction));
+  if (changed.length > 1) {
+    lines.push("", changed.map((p) => `${text(p.environment)}: ${p.changes.filter(isAction).length}`).join(" \xB7 "));
+  }
+  for (const note of notes) lines.push("", `> ${note}`);
   for (const p of plans) {
     if (p.changes.length === 0) continue;
     const isProd = productionNames.includes(p.environment.toLowerCase());
     lines.push("", `### ${text(p.environment)}${isProd ? " (production)" : ""}`, "");
-    if (isProd && p.changes.some((c) => c.kind !== "untracked")) {
+    if (isProd && p.changes.some(isAction)) {
       lines.push("> [!WARNING]", "> Changes production. A reviewer must approve before they apply.", "");
     }
     lines.push("| | Flag | Before | After |", "|---|---|---|---|");
-    for (const c of p.changes) {
-      if (c.kind === "update") {
-        lines.push(`| ~ | ${code(c.flag)} | ${onOff(c.before.enabled)}, ${cell(c.before.value)} | **${onOff(c.after.enabled)}, ${cell(c.after.value)}** |`);
-      } else if (c.kind === "create") {
-        lines.push(`| + | ${code(c.flag)} | (new flag) | **${onOff(c.after.enabled)}, ${cell(c.after.value)}** |`);
-      } else {
-        lines.push(`| ! | ${code(c.flag)} | ${onOff(c.before.enabled)}, ${cell(c.before.value)} | not in YAML, left alone |`);
-      }
-    }
+    for (const c of p.changes) lines.push(planRow(c));
   }
   const unchanged = plans.filter((p) => p.changes.length === 0).map((p) => p.environment);
   if (unchanged.length > 0 && actions > 0) lines.push("", `No changes in: ${unchanged.map(text).join(", ")}.`);
@@ -31070,15 +31112,15 @@ function countDrift(plans) {
 function describeDrift(c) {
   switch (c.kind) {
     case "update":
-      return {
-        git: `${onOff(c.after.enabled)}, ${cell(c.after.value)}`,
-        live: `${onOff(c.before.enabled)}, ${cell(c.before.value)}`,
-        what: "changed outside Git"
-      };
+      return { git: both(c.after), live: both(c.before), what: "changed outside Git" };
     case "create":
-      return { git: `${onOff(c.after.enabled)}, ${cell(c.after.value)}`, live: "missing", what: "deleted outside Git" };
+      return { git: both(c.after), live: "missing", what: "deleted outside Git" };
     case "untracked":
-      return { git: "(not in Git)", live: `${onOff(c.before.enabled)}, ${cell(c.before.value)}`, what: "added outside Git" };
+      return { git: "(not in Git)", live: both(c.before), what: "added outside Git" };
+    case "archived":
+      return c.before ? { git: `archived, ${both(c.after)}`, live: both(c.before), what: "archived flag changed outside Git" } : { git: `archived, ${both(c.after)}`, live: "missing", what: "deleted outside Git" };
+    case "status":
+      return c.archivedInGit ? { git: "archived", live: "not archived", what: "unarchived outside Git" } : { git: "not archived", live: "archived", what: "archived outside Git" };
   }
 }
 function formatDriftMarkdown(plans) {
@@ -31093,8 +31135,9 @@ function formatDriftMarkdown(plans) {
     "",
     `**${total} flag${total === 1 ? "" : "s"}** in Flagsmith no longer ${total === 1 ? "matches" : "match"} the flag files in Git. Someone probably changed them in the Flagsmith dashboard.`
   );
-  for (const p of plans) {
-    if (p.changes.length === 0) continue;
+  const drifted = plans.filter((p) => p.changes.length > 0);
+  if (drifted.length > 1) lines.push("", drifted.map((p) => `${text(p.environment)}: ${p.changes.length}`).join(" \xB7 "));
+  for (const p of drifted) {
     lines.push("", `### ${text(p.environment)}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
     for (const c of p.changes) {
       const d = describeDrift(c);
@@ -31104,7 +31147,7 @@ function formatDriftMarkdown(plans) {
   lines.push(
     "",
     "**To fix, pick one:**",
-    "- Put Flagsmith back to what Git says: re-run the FlagOps apply workflow (or `flagops apply`).",
+    "- Put Flagsmith back to what Git says: re-run the FlagOps apply workflow (or `flagops apply`). Apply never changes archived flags or archive state; fix those in the dashboard.",
     "- Keep the dashboard change: run `flagops pull` and open a pull request with the updated files.",
     "",
     "This issue closes itself once Flagsmith and Git match again."
@@ -31117,10 +31160,10 @@ function formatDrift(plans) {
   const lines = [];
   for (const p of plans) {
     if (p.changes.length === 0) continue;
-    lines.push(`${p.environment}:`);
+    lines.push(`${safe(p.environment)}:`);
     for (const c of p.changes) {
       const d = describeDrift(c);
-      lines.push(`  ${c.flag}: Git says ${plain(d.git)}, Flagsmith has ${plain(d.live)} (${d.what})`);
+      lines.push(`  ${safe(c.flag)}: Git says ${plain(d.git)}, Flagsmith has ${plain(d.live)} (${d.what})`);
     }
   }
   lines.push("", `Drift found in ${total} flag${total === 1 ? "" : "s"}.`);
@@ -31129,14 +31172,14 @@ function formatDrift(plans) {
 function formatPlan(plans, refs) {
   const lines = [];
   for (const p of plans) {
-    lines.push(`${p.environment}:`);
+    lines.push(`${safe(p.environment)}:`);
     if (p.changes.length === 0) lines.push("  no changes");
     else lines.push(...p.changes.map(describe3));
   }
   const flags = changedFlags(plans);
   if (refs && flags.length > 0) {
     lines.push("", "Used in:");
-    for (const flag of flags) lines.push(`  ${flag}: ${formatReferences(refs.get(flag) ?? [])}`);
+    for (const flag of flags) lines.push(`  ${safe(flag)}: ${formatReferences(refs.get(flag) ?? [])}`);
   }
   const actions = countActions(plans);
   lines.push("");
@@ -31198,9 +31241,9 @@ function formatStaleMarkdown(stale, days, refs) {
     `|---|---|---|---|${refs ? "---|" : ""}`
   );
   for (const s of stale) {
-    const setting = `${s.enabled ? "on" : "off"}${s.value === null ? "" : `, ${code(JSON.stringify(s.value))}`}`;
+    const setting2 = `${s.enabled ? "on" : "off"}${s.value === null ? "" : `, ${code(JSON.stringify(s.value))}`}`;
     const todo = s.enabled ? "Remove flag, keep the code it turns on" : "Remove flag and the code behind it";
-    lines.push(`| ${code(s.name)} | ${setting} | ${s.daysUnchanged} days | ${todo} |${refs ? ` ${text(refsText(refs.get(s.name)))} |` : ""}`);
+    lines.push(`| ${code(s.name)} | ${setting2} | ${s.daysUnchanged} days | ${todo} |${refs ? ` ${text(refsText(refs.get(s.name)))} |` : ""}`);
   }
   lines.push("", `Tag a flag \`${PERMANENT_TAG}\` in Flagsmith to leave it out (for example a kill switch).`);
   return lines.join("\n") + "\n";
@@ -31269,7 +31312,7 @@ function adminSource(fs2, projectId) {
     listEnvironments: () => fs2.listEnvironments(projectId),
     async readLive(env) {
       features ??= fs2.listFeatures(projectId);
-      const nameById = new Map((await features).filter((f) => !f.is_archived).map((f) => [f.id, f.name]));
+      const nameById = new Map((await features).map((f) => [f.id, f.name]));
       const live = /* @__PURE__ */ new Map();
       for (const s of await fs2.listEnvironmentStates(env.api_key)) {
         const name = nameById.get(s.feature);
@@ -31314,6 +31357,8 @@ async function buildPlans(source, dir, onlyEnvs) {
     const missing = wanted.filter((w) => !files.some((f) => f.environment.toLowerCase() === w));
     if (missing.length > 0) throw new Error(`No flag file for environment(s): ${missing.join(", ")}`);
   }
+  const archivedNames = await source.archived?.();
+  const archived = archivedNames && new Set(archivedNames.map((n) => n.toLowerCase()));
   const plans = [];
   for (const file2 of files) {
     const env = environments.find((e) => e.name.toLowerCase() === file2.environment.toLowerCase());
@@ -31323,21 +31368,9 @@ async function buildPlans(source, dir, onlyEnvs) {
       );
     }
     const live = await source.readLive(env);
-    plans.push({ ...diffEnvironment(file2, live), env });
+    plans.push({ ...diffEnvironment(file2, live, archived), env });
   }
   const problems = [];
-  const archivedNames = await source.archived?.();
-  if (archivedNames) {
-    const archived = new Set(archivedNames.map((n) => n.toLowerCase()));
-    for (const [name, entry] of Object.entries(files[0]?.flags ?? {})) {
-      const inFlagsmith = archived.has(name.toLowerCase());
-      if (inFlagsmith && !isArchived(entry)) {
-        problems.push(`"${name}" is archived in Flagsmith. Replace its settings with "archived: true" in every flag file (flagops pull writes this), or unarchive it.`);
-      } else if (!inFlagsmith && isArchived(entry)) {
-        problems.push(`"${name}" is marked archived in YAML but isn't archived in Flagsmith. Archive it there, or replace "archived: true" with its settings.`);
-      }
-    }
-  }
   for (const p of plans) {
     const liveNames = new Map(
       p.changes.filter((c) => c.kind === "untracked").map((c) => [c.flag.toLowerCase(), c.flag])
@@ -31353,12 +31386,14 @@ async function buildPlans(source, dir, onlyEnvs) {
 
 // src/apply.ts
 async function applyPlans(fs2, projectId, plans) {
+  const conflicts = archiveConflicts(plans);
+  if (conflicts.length > 0) throw new Error(conflicts.join("\n"));
   const applied = [];
   const created = /* @__PURE__ */ new Map();
   for (const plan of plans) {
     for (const change of plan.changes) {
-      if (change.kind === "untracked") continue;
-      const what = `${plan.environment}: ${change.kind === "create" ? "+" : "~"} ${change.flag}`;
+      if (change.kind !== "update" && change.kind !== "create") continue;
+      const what = `${safe(plan.environment)}: ${change.kind === "create" ? "+" : "~"} ${safe(change.flag)}`;
       try {
         let stateId;
         if (change.kind === "update") {
@@ -31419,16 +31454,31 @@ program2.command("pull").description("Export each environment's flags to <dir>/<
     fs2.listEnvironments(project.id),
     fs2.listFeatures(project.id)
   ]);
-  await (0, import_promises3.mkdir)(opts.dir, { recursive: true });
   console.log(`Project ${project.name}: ${features.length} flags, ${environments.length} environments`);
+  const files = [];
   for (const env of environments) {
-    const states = await fs2.listEnvironmentStates(env.api_key);
-    const file2 = buildFlagFile(env.name, features, states);
     const target = import_node_path4.default.join(opts.dir, fileNameFor(env.name));
-    const yaml = toYaml(file2);
-    parseFlagFile(yaml, target);
-    await (0, import_promises3.writeFile)(target, yaml, "utf8");
+    const other = files.find((f) => f.target === target);
+    if (other) throw new Error(`Environments "${other.file.environment}" and "${env.name}" would both be written to ${target}. Rename one in Flagsmith.`);
+    files.push({ target, file: buildFlagFile(env.name, features, await fs2.listEnvironmentStates(env.api_key)) });
+  }
+  const skipped = /* @__PURE__ */ new Map();
+  for (const { file: file2 } of files) {
+    const result = flagFileSchema.safeParse(file2);
+    for (const issue2 of result.success ? [] : result.error.issues) {
+      const name = issue2.path[0] === "flags" && typeof issue2.path[1] === "string" ? issue2.path[1] : void 0;
+      if (name === void 0) throw new Error(`Environment "${file2.environment}": ${issue2.message}`);
+      if (!skipped.has(name)) skipped.set(name, issue2.message);
+    }
+  }
+  for (const { file: file2 } of files) for (const name of skipped.keys()) delete file2.flags[name];
+  await (0, import_promises3.mkdir)(opts.dir, { recursive: true });
+  for (const { target, file: file2 } of files) {
+    await (0, import_promises3.writeFile)(target, toYaml(file2), "utf8");
     console.log(`  wrote ${target} (${Object.keys(file2.flags).length} flags)`);
+  }
+  for (const [name, reason] of skipped) {
+    console.error(`  skipped ${JSON.stringify(name)}: ${reason}. Rename or fix it in Flagsmith to manage it here.`);
   }
 });
 var collect = (value, previous = []) => [...previous, value];
@@ -31445,9 +31495,11 @@ program2.command("validate").description("Check the flag files without connectin
 });
 program2.command("plan").description("Show what apply would change, without changing anything").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("-f, --format <format>", "text or markdown", "text").option("-o, --out <file>", "also write the plan to this file").option("--code <dir>", "folder to search for code that uses changed flags", ".").option("--no-code", "don't search the code").action(async (opts) => {
   if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
-  const plans = await buildPlans(await readSource(opts.project), opts.dir, opts.env);
+  const source = await readSource(opts.project);
+  const plans = await buildPlans(source, opts.dir, opts.env);
   const refs = opts.code === false ? void 0 : await findReferences(opts.code, changedFlags(plans), [opts.dir]);
-  const output2 = opts.format === "markdown" ? formatPlanMarkdown(plans, refs) : formatPlan(plans, refs);
+  const notes = source.archived ? [] : ["Planned with read-only keys, which can't see whether a flag is archived. Apply checks that with the admin key and stops, changing nothing, if YAML and Flagsmith disagree."];
+  const output2 = opts.format === "markdown" ? formatPlanMarkdown(plans, refs, notes) : formatPlan(plans, refs);
   console.log(output2);
   if (opts.out) await (0, import_promises3.writeFile)(opts.out, output2, "utf8");
 });
@@ -31483,6 +31535,10 @@ program2.command("apply").description("Make Flagsmith match the YAML files (neve
   const project = await resolveProject(fs2, opts.project);
   const plans = await buildPlans(adminSource(fs2, project.id), opts.dir, opts.env);
   console.log(formatPlan(plans));
+  const conflicts = archiveConflicts(plans);
+  if (conflicts.length > 0) throw new Error(`
+Nothing changed:
+${conflicts.join("\n")}`);
   if (countActions(plans) === 0) return;
   if (!opts.yes) {
     if (!process.stdin.isTTY) throw new Error("Not asking for confirmation without a terminal. Use --yes.");

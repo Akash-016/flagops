@@ -57,7 +57,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v5
+    - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
       with:
         node-version: 22
 
@@ -79,7 +79,7 @@ runs:
 
     - name: Post plan on the pull request
       if: inputs.command == 'plan' && inputs.comment == 'true' && github.event_name == 'pull_request'
-      uses: actions/github-script@v8
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
       env:
         PLAN_FILE: ${{ steps.run.outputs.report-file }}
       with:
@@ -107,7 +107,7 @@ runs:
 
     - name: Open, update or close the drift issue
       if: inputs.command == 'drift' && inputs.issue == 'true'
-      uses: actions/github-script@v8
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
       env:
         REPORT_FILE: ${{ steps.run.outputs.report-file }}
         DRIFT: ${{ steps.run.outputs.drift }}

@@ -4,9 +4,10 @@ import path from "node:path";
 import { Command } from "commander";
 import { getApiUrl, getConfig, getEnvironmentKeys } from "./config.js";
 import { FlagsmithClient, type FeatureState, type Project } from "./flagsmith.js";
-import { buildFlagFile, fileNameFor, parseFlagFile, toYaml } from "./flagfile.js";
+import { buildFlagFile, fileNameFor, flagFileSchema, toYaml, type FlagFile } from "./flagfile.js";
 import { createInterface } from "node:readline/promises";
 import {
+  archiveConflicts,
   changedFlags,
   countActions,
   countDrift,
@@ -69,17 +70,37 @@ program
       fs.listFeatures(project.id),
     ]);
 
-    await mkdir(opts.dir, { recursive: true });
     console.log(`Project ${project.name}: ${features.length} flags, ${environments.length} environments`);
 
+    // Read everything before writing anything, so a problem never leaves half the files updated.
+    const files: { target: string; file: FlagFile }[] = [];
     for (const env of environments) {
-      const states = await fs.listEnvironmentStates(env.api_key);
-      const file = buildFlagFile(env.name, features, states);
       const target = path.join(opts.dir, fileNameFor(env.name));
-      const yaml = toYaml(file);
-      parseFlagFile(yaml, target); // never write a file that validate would then reject
-      await writeFile(target, yaml, "utf8");
+      const other = files.find((f) => f.target === target);
+      if (other) throw new Error(`Environments "${other.file.environment}" and "${env.name}" would both be written to ${target}. Rename one in Flagsmith.`);
+      files.push({ target, file: buildFlagFile(env.name, features, await fs.listEnvironmentStates(env.api_key)) });
+    }
+
+    // Flagsmith accepts some names and values that validate rejects (a name with a tab, say).
+    // Leave those flags out of every file, and say so, instead of writing files that won't validate.
+    const skipped = new Map<string, string>();
+    for (const { file } of files) {
+      const result = flagFileSchema.safeParse(file);
+      for (const issue of result.success ? [] : result.error.issues) {
+        const name = issue.path[0] === "flags" && typeof issue.path[1] === "string" ? issue.path[1] : undefined;
+        if (name === undefined) throw new Error(`Environment "${file.environment}": ${issue.message}`);
+        if (!skipped.has(name)) skipped.set(name, issue.message);
+      }
+    }
+    for (const { file } of files) for (const name of skipped.keys()) delete file.flags[name];
+
+    await mkdir(opts.dir, { recursive: true });
+    for (const { target, file } of files) {
+      await writeFile(target, toYaml(file), "utf8");
       console.log(`  wrote ${target} (${Object.keys(file.flags).length} flags)`);
+    }
+    for (const [name, reason] of skipped) {
+      console.error(`  skipped ${JSON.stringify(name)}: ${reason}. Rename or fix it in Flagsmith to manage it here.`);
     }
   });
 
@@ -125,9 +146,13 @@ program
   .option("--no-code", "don't search the code")
   .action(async (opts: PlanOptions) => {
     if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
-    const plans = await buildPlans(await readSource(opts.project), opts.dir, opts.env);
+    const source = await readSource(opts.project);
+    const plans = await buildPlans(source, opts.dir, opts.env);
     const refs = opts.code === false ? undefined : await findReferences(opts.code, changedFlags(plans), [opts.dir]);
-    const output = opts.format === "markdown" ? formatPlanMarkdown(plans, refs) : formatPlan(plans, refs);
+    const notes = source.archived
+      ? []
+      : ["Planned with read-only keys, which can't see whether a flag is archived. Apply checks that with the admin key and stops, changing nothing, if YAML and Flagsmith disagree."];
+    const output = opts.format === "markdown" ? formatPlanMarkdown(plans, refs, notes) : formatPlan(plans, refs);
     console.log(output);
     if (opts.out) await writeFile(opts.out, output, "utf8");
   });
@@ -193,6 +218,8 @@ program
     const project = await resolveProject(fs, opts.project);
     const plans = await buildPlans(adminSource(fs, project.id), opts.dir, opts.env);
     console.log(formatPlan(plans));
+    const conflicts = archiveConflicts(plans);
+    if (conflicts.length > 0) throw new Error(`\nNothing changed:\n${conflicts.join("\n")}`);
     if (countActions(plans) === 0) return;
 
     if (!opts.yes) {

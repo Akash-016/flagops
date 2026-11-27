@@ -144,6 +144,7 @@ jobs:
             | jq -r '(.results? // .) | .[] | select(.name=="legacy_payments") | .id')
           curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json" \
             -d '{"is_archived": true}' "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/features/$legacy/" > /dev/null
+          expect_exit 2 $cli drift
           expect_exit 1 $cli apply --yes
           $cli pull
           grep -A1 legacy_payments: flags/production.yaml | grep -q "archived: true"
@@ -151,7 +152,84 @@ jobs:
           expect_exit 0 $cli drift
           expect_exit 0 $readonly_cli drift
           $cli apply --yes
+
+          echo "--- an archived flag changed in the dashboard: Flagsmith still serves it, so both modes report drift"
+          legacy_state=$(curl -sf -H "$auth" "$FLAGSMITH_API_URL/environments/$env_key/featurestates/?feature=$legacy" \
+            | jq -r '(.results? // .) | .[] | select(.identity==null and .feature_segment==null) | .id')
+          was=$(curl -sf -H "$auth" "$FLAGSMITH_API_URL/environments/$env_key/featurestates/$legacy_state/" | jq -r .enabled)
+          flip=$([ "$was" = true ] && echo false || echo true)
+          curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json" \
+            -d "{\"enabled\": $flip}" "$FLAGSMITH_API_URL/environments/$env_key/featurestates/$legacy_state/" > /dev/null
+          expect_exit 2 $cli drift
+          expect_exit 2 $readonly_cli drift
+          echo "--- apply leaves archived flags alone"
+          $cli apply --yes | tee apply.txt
+          grep -q "Nothing to apply" apply.txt
+          expect_exit 2 $cli drift
+
+          echo "--- unarchived in the dashboard: admin drift reports it, apply refuses and changes nothing"
+          curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json" \
+            -d '{"is_archived": false}' "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/features/$legacy/" > /dev/null
+          $cli drift | tee drift.txt || true
+          grep -q "unarchived outside Git" drift.txt
+          expect_exit 1 $cli apply --yes
+
+          # For the Action steps below.
+          echo "CI_FLAGS_DIR=$RUNNER_TEMP/e2e/flags" >> "$GITHUB_ENV"
+          echo "CI_ENV_KEYS=$(echo $keys | tr ' ' ',')" >> "$GITHUB_ENV"
           echo "All round-trip checks passed."
+
+      # The same checks through the Action itself (action.yml + dist/action.cjs), not only the CLI.
+      - name: "Action: validate"
+        uses: ./
+        with:
+          command: validate
+          dir: ${{ env.CI_FLAGS_DIR }}
+
+      - name: "Action: plan with read-only keys"
+        id: plan
+        uses: ./
+        with:
+          command: plan
+          api-url: ${{ env.FLAGSMITH_API_URL }}
+          environment-keys: ${{ env.CI_ENV_KEYS }}
+          dir: ${{ env.CI_FLAGS_DIR }}
+          comment: "false"
+
+      - name: "Action: drift with the admin key"
+        id: drift
+        uses: ./
+        with:
+          command: drift
+          api-url: ${{ env.FLAGSMITH_API_URL }}
+          admin-key: ${{ env.FLAGSMITH_ADMIN_KEY }}
+          project: ${{ env.FLAGSMITH_PROJECT }}
+          dir: ${{ env.CI_FLAGS_DIR }}
+          issue: "false"
+
+      - name: "Action: apply must refuse while archive state disagrees"
+        id: apply
+        continue-on-error: true
+        uses: ./
+        with:
+          command: apply
+          api-url: ${{ env.FLAGSMITH_API_URL }}
+          admin-key: ${{ env.FLAGSMITH_ADMIN_KEY }}
+          project: ${{ env.FLAGSMITH_PROJECT }}
+          dir: ${{ env.CI_FLAGS_DIR }}
+
+      - name: Check the Action results
+        env:
+          CHANGES: ${{ steps.plan.outputs.changes }}
+          DRIFT: ${{ steps.drift.outputs.drift }}
+          APPLY: ${{ steps.apply.outcome }}
+        run: |
+          echo "plan changes=$CHANGES, drift=$DRIFT, apply=$APPLY"
+          [ "$CHANGES" = 0 ] || { echo "::error::expected 0 planned changes"; exit 1; }
+          [ "$DRIFT" = true ] || { echo "::error::expected drift"; exit 1; }
+          [ "$APPLY" = failure ] || { echo "::error::apply should have refused"; exit 1; }
+          grep -q "unarchived outside Git" "$RUNNER_TEMP/flagops-drift.md"
+          grep -q "read-only keys" "$RUNNER_TEMP/flagops-plan.md"
 
       - name: Flagsmith logs on failure
         if: failure()

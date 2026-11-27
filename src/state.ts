@@ -2,7 +2,7 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { isArchived, parseFlagFile, type FlagFile } from "./flagfile.js";
+import { parseFlagFile, type FlagFile } from "./flagfile.js";
 import { readEnvironmentDocument, type Environment, type EnvironmentDocument, type Feature, type FlagsmithClient } from "./flagsmith.js";
 import { diffEnvironment, sortByEnvironment, type EnvironmentPlan, type LiveFlags } from "./diff.js";
 import { checkSameFlags, type NamedFlagFile } from "./validate.js";
@@ -59,7 +59,8 @@ export function adminSource(fs: FlagsmithClient, projectId: number): LiveSource 
     listEnvironments: () => fs.listEnvironments(projectId),
     async readLive(env) {
       features ??= fs.listFeatures(projectId);
-      const nameById = new Map((await features).filter((f) => !f.is_archived).map((f) => [f.id, f.name]));
+      // Archived flags too: Flagsmith still serves them, and environment documents include them.
+      const nameById = new Map((await features).map((f) => [f.id, f.name]));
       const live: LiveFlags = new Map();
       for (const s of await fs.listEnvironmentStates(env.api_key)) {
         const name = nameById.get(s.feature);
@@ -115,6 +116,11 @@ export async function buildPlans(source: LiveSource, dir: string, onlyEnvs?: str
     if (missing.length > 0) throw new Error(`No flag file for environment(s): ${missing.join(", ")}`);
   }
 
+  // Only the Admin API can tell archived flags apart; with it, a flag archived on one side
+  // only is reported (drift) and blocks apply. Read-only keys compare archived flags' settings.
+  const archivedNames = await source.archived?.();
+  const archived = archivedNames && new Set(archivedNames.map((n) => n.toLowerCase()));
+
   const plans: PlannedEnvironment[] = [];
   for (const file of files) {
     const env = environments.find((e) => e.name.toLowerCase() === file.environment.toLowerCase());
@@ -124,26 +130,12 @@ export async function buildPlans(source: LiveSource, dir: string, onlyEnvs?: str
       );
     }
     const live = await source.readLive(env);
-    plans.push({ ...diffEnvironment(file, live), env });
+    plans.push({ ...diffEnvironment(file, live, archived), env });
   }
 
   // Flagsmith rejects a new flag whose name matches an existing one in any case, archived or
   // not. Stop here, before apply changes anything, with a message that says what to do.
-  // Archived flags must be marked "archived: true" in YAML, so read-only runs (which can't see
-  // archived state) leave them alone too. Only the Admin API can check the marks.
   const problems: string[] = [];
-  const archivedNames = await source.archived?.();
-  if (archivedNames) {
-    const archived = new Set(archivedNames.map((n) => n.toLowerCase()));
-    for (const [name, entry] of Object.entries(files[0]?.flags ?? {})) {
-      const inFlagsmith = archived.has(name.toLowerCase());
-      if (inFlagsmith && !isArchived(entry)) {
-        problems.push(`"${name}" is archived in Flagsmith. Replace its settings with "archived: true" in every flag file (flagops pull writes this), or unarchive it.`);
-      } else if (!inFlagsmith && isArchived(entry)) {
-        problems.push(`"${name}" is marked archived in YAML but isn't archived in Flagsmith. Archive it there, or replace "archived: true" with its settings.`);
-      }
-    }
-  }
   for (const p of plans) {
     const liveNames = new Map(
       p.changes.filter((c) => c.kind === "untracked").map((c) => [c.flag.toLowerCase(), c.flag]),

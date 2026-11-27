@@ -68,7 +68,7 @@ describe("formatting", () => {
   it("makes a table in markdown", () => {
     const md = formatStaleMarkdown(stale, 30, refs);
     expect(md).toContain("**2 flags** have had the same setting");
-    expect(md).toContain("| <code>dark_mode</code> | on | 60 days | Remove flag, keep the code it turns on | src/layout.js:10 |");
+    expect(md).toContain("| <code>dark&#95;mode</code> | on | 60 days | Remove flag, keep the code it turns on | src/layout&#46;js&#58;10 |");
   });
 
   it("says so when nothing is stale", () => {

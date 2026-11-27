@@ -82,7 +82,7 @@ npx github:Akash-016/flagops apply    # make the change (asks first)
 1. Copy the four files from [`examples/workflows/`](examples/workflows) to `.github/workflows/`.
 2. In Flagsmith, create a server-side key for each environment (Environment settings → SDK Keys → Server-side). These can read flags but not change them.
 3. Settings → Secrets and variables → Actions: add the variable `FLAGSMITH_API_URL` and the secret `FLAGSMITH_ENVIRONMENT_KEYS` (the server-side keys, separated by spaces). `plan` and `drift` use these.
-4. Settings → Environments: create `non-production` and `production`. For both, set Deployment branches to `main` only and add the environment secret `FLAGSMITH_ADMIN_KEY`. For `production`, also add Required reviewers and turn on Prevent self-review. Only `apply` uses the admin key. **Check your GitHub plan:** in private repositories, environments (with their secrets and branch limits) need GitHub Pro, Team or Enterprise, and required reviewers need Enterprise. On GitHub Free, use a public repository.
+4. Settings → Environments: create `non-production` and `production`. For both, set Deployment branches to `main` only and add the environment secret `FLAGSMITH_ADMIN_KEY`. For `production`, also add Required reviewers, turn on Prevent self-review, and turn off Allow administrators to bypass (on by default). Only `apply` uses the admin key. **Check your GitHub plan:** in private repositories, environments (with their secrets and branch limits) need GitHub Pro, Team or Enterprise, and required reviewers need Enterprise. On GitHub Free, use a public repository.
 5. Protect `main` with a ruleset: require a pull request with at least one approval, require review from code owners, and make `validate` a required status check. Add a `CODEOWNERS` line such as `/.github/ @your-team`, so workflow changes (and `CODEOWNERS` itself) need review.
 6. Read the [security model](#security-model).
 
@@ -142,19 +142,25 @@ flags:
     value: 25
 ```
 
-Every flag needs both `enabled` and `value`. `value` can be text, a whole number, `true`/`false`, or `null`. Flag names can be anything Flagsmith accepts except control characters; FlagOps escapes them wherever they appear in Markdown. Anything else stops every command with the exact place, including values Flagsmith would store differently (decimals, numbers above 2147483647, text with leading or trailing spaces) and misspelt keys:
+Every flag needs both `enabled` and `value`. `value` can be text, a whole number, `true`/`false`, or `null`. Flag names can be anything Flagsmith stores unchanged: up to 2000 characters, no control characters, no leading or trailing spaces. FlagOps escapes names and values wherever they appear in Markdown, so they can't add formatting, links or mentions. Anything else stops every command with the exact place, including values Flagsmith would store differently (decimals, numbers above 2147483647, text with leading or trailing spaces as Python's `strip()` sees them) and misspelt keys:
 
 ```
 production.yaml is not a valid flag file:
   flags.max_cart_items: Unrecognized key: "vaule"
 ```
 
-**Archived flags** appear as `archived: true` with no settings, and FlagOps leaves them alone. `flagops pull` writes this for you. If someone archives a flag in Flagsmith, `apply` stops and asks you to mark it (read-only keys can't tell archived flags apart, so the mark keeps every command in agreement):
+**Archived flags** are marked `archived: true` and keep their settings, because Flagsmith still serves archived flags to SDKs. `flagops pull` writes this for you. `apply` never changes an archived flag, but `drift` checks its settings like any other, so a dashboard edit to an archived flag still opens an issue:
 
 ```yaml
   old_banner:
     archived: true
+    enabled: false
+    value: null
 ```
+
+If a flag is archived on one side only (archived or unarchived in the dashboard, or deleted and recreated), `drift` with the admin key reports it, and `apply` stops without changing anything until you update the YAML or the dashboard.
+
+If Flagsmith holds a flag whose name or value FlagOps can't write back unchanged (a name with a tab, say), `pull` leaves that flag out of every file, says why, and writes the rest.
 
 **Every file must list the same flags.** A Flagsmith flag always exists in every environment, so a new flag goes into each file (with `enabled: false` where it should stay off). If it's missing from one, every command stops and says which file to fix.
 
@@ -179,7 +185,7 @@ production.yaml is not a valid flag file:
 
 `plan` and `drift` also accept `admin-key` if you don't set `environment-keys`, but then a pull request workflow holds the admin key.
 
-The Action is a prebuilt bundle (`dist/`), so it installs nothing and runs in seconds. Tested on Linux and Windows runners.
+The Action is a prebuilt bundle (`dist/`), so it installs nothing and runs in seconds. CI runs `validate`, `plan`, `drift` and `apply` through the Action on Linux against Flagsmith in Docker; the demo runs it on a Windows self-hosted runner.
 
 ## Security model
 
@@ -198,8 +204,8 @@ FlagOps makes Git the record of every flag change, and makes production changes 
 **Other points:**
 
 - **Fork pull requests get no secrets.** The examples run only `validate` for forks and skip `plan`.
-- **Drift is a backstop for what FlagOps manages.** A change to a flag's default on/off or value outside a reviewed merge, from the dashboard or from a misused key, shows up in the next drift check as an issue. Drift does not see segment overrides, identity overrides, or environments with no flag file.
-- **Self-hosted runners belong on private repos.** On a public repo, a fork pull request can add a workflow that runs on the runner's machine. If you must (the [demo](https://github.com/Akash-016/flagops-demo) does, to reach a laptop), require approval for workflows from all outside contributors, and keep no other secrets on that machine: any job that reaches the runner can read them.
+- **Drift is a backstop for what FlagOps manages.** A change to a flag's default on/off or value outside a reviewed merge, from the dashboard or from a misused key, shows up in the next drift check as an issue, archived flags included. Drift does not see segment overrides, identity overrides, or environments with no flag file. With read-only keys it also can't see whether a flag is archived; run drift with the admin key from a scheduled job on `main` to catch that.
+- **Self-hosted runners belong on private repos.** On a public repo, a fork pull request can add a workflow that runs on the runner's machine. If you must (the [demo](https://github.com/Akash-016/flagops-demo) does, to reach a laptop), require approval for workflows from all outside contributors, and keep no other secrets on that machine: any job that reaches the runner can read them. If the runner's machine also hosts Flagsmith, as in the demo, a job on it can likely reach Flagsmith's database directly and skip every control above, so do this only for a demo.
 - **`stale` needs the admin key**, because only the Admin API reports when each flag last changed. Run it locally, not from pull requests.
 
 ## Limits
@@ -208,8 +214,8 @@ FlagOps makes Git the record of every flag change, and makes production changes 
 - `apply` never deletes flags. Flags removed from YAML are reported as "left alone".
 - `apply` stops at the first failed change and lists what it did; there is no rollback. Run it again after fixing the cause.
 - Creating a flag creates it in every environment, even with `--env`.
-- Environment documents don't say whether a flag is archived, so with read-only keys, `plan` and `drift` rely on the `archived: true` marks. If someone archives a flag in Flagsmith and nobody marks it, only commands with the admin key notice (`apply` stops with a message saying what to do).
-- Flagsmith calls time out after 30 seconds. Reads are retried twice; writes are not.
+- Environment documents don't say whether a flag is archived, so with read-only keys, `plan` and `drift` compare archived flags' settings but can't see a flag archived or unarchived in the dashboard. The plan comment says so. Commands with the admin key notice, and `apply` stops with a message saying what to do.
+- Flagsmith calls time out after 30 seconds (set `FLAGSMITH_TIMEOUT` in seconds to change it). Reads are retried twice, and any call Flagsmith rate-limits (429) is retried after the time it asks for; other writes are not retried.
 - A new flag must be listed in every environment file, because Flagsmith creates each flag in every environment.
 - Free Flagsmith organisations get one project; FlagOps works with one project per flags folder.
 - `stale` uses Flagsmith's last-update time for each environment's flag state.

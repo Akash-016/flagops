@@ -71,7 +71,38 @@ describe("formatPlanMarkdown", () => {
     for (const bad of ["`", "<!--", "@someone"]) expect(body).not.toContain(bad);
     const rows = body.split("\n").filter((l) => l.includes("evil"));
     expect(rows).toHaveLength(1); // the name's newlines didn't split the row
-    expect(rows[0].split("|")).toHaveLength(6); // nor did its pipe add a column    expect(formatDrift([plan])).toContain(evil); // terminal output stays readable
+    expect(rows[0].split("|")).toHaveLength(6); // nor did its pipe add a column
+    expect(formatDrift([plan])).toContain(JSON.stringify(evil)); // terminal output: quoted, newlines escaped
+  });
+
+  it("stops Markdown emphasis, links and email links from names and values", () => {
+    // Each form below was checked against GitHub's Markdown renderer.
+    const plan = diffEnvironment(wanted({}), live({ __init__: [true, "https://evil.example/x"], _beta_: [true, "a@b.io www.x.io"] }));
+    const md = formatPlanMarkdown([plan]);
+    expect(md).toContain("<code>&#95;&#95;init&#95;&#95;</code>");
+    expect(md).toContain("https&#58;//evil&#46;example/x");
+    expect(md).toContain("a&#64;<wbr>b&#46;io www&#46;x&#46;io");
+    expect(md).not.toMatch(/https:|www\.|@b|__/);
+    expect(formatDrift([plan])).toContain('_beta_: Git says (not in Git), Flagsmith has on, "a@b.io www.x.io"');
+  });
+
+  it("quotes names with control characters in terminal output, so they can't start a workflow command", () => {
+    const plan = diffEnvironment(wanted({}), live({ "x\n::warning::y": [true, null] }));
+    expect(formatPlan([plan])).toContain('  ! "x\\n::warning::y": in Flagsmith');
+    expect(formatPlan([plan]).split("\n").some((l) => l.startsWith("::"))).toBe(false);
+  });
+
+  it("shows archived flags as left alone, and a summary line and notes up top", () => {
+    const dev = { ...diffEnvironment(wanted({ a: { enabled: true, value: null } }), live({ a: [false, null] })), environment: "Development" };
+    const prod = diffEnvironment(
+      wanted({ a: { enabled: true, value: null }, old: { archived: true, enabled: true, value: null } }),
+      live({ a: [false, null], old: [false, null] }),
+    );
+    const md = formatPlanMarkdown([dev, prod], undefined, ["read-only note"]);
+    expect(md).toContain("**2 changes**");
+    expect(md).toContain("Development: 1 · Production: 1");
+    expect(md).toContain("> read-only note");
+    expect(md).toContain("| ! | <code>old</code> | off, <code>null</code> | on, <code>null</code>: archived, left alone |");
   });
 
   it("says so when there is nothing to change", () => {
@@ -104,7 +135,7 @@ describe("blast radius in the plan", () => {
     const md = formatPlanMarkdown([plan], refs);
     expect(md).toContain("### Where these flags are used");
     expect(md).toContain("- <code>banner</code>: not found in code");
-    expect(md).toContain("- <code>cart</code>: <code>src/cart.ts:4</code>");
+    expect(md).toContain("- <code>cart</code>: <code>src/cart&#46;ts&#58;4</code>");
     expect(md).not.toContain("<code>old</code>:");
     expect(formatPlan([plan], refs)).toContain("  cart: src/cart.ts:4");
   });

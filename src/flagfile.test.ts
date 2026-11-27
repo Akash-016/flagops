@@ -31,9 +31,9 @@ describe("buildFlagFile", () => {
     expect(file.flags.zeta).toEqual({ enabled: false, value: 5 });
   });
 
-  it("marks archived flags and skips flags with no state", () => {
-    const file = buildFlagFile("Dev", [feature(1, "old", true), feature(2, "orphan")], [state(1, true)]);
-    expect(file.flags).toEqual({ old: { archived: true } });
+  it("marks archived flags, keeps their settings, and skips flags with no state", () => {
+    const file = buildFlagFile("Dev", [feature(1, "old", true), feature(2, "orphan")], [state(1, true, "v")]);
+    expect(file.flags).toEqual({ old: { archived: true, enabled: true, value: "v" } });
   });
 
   it("writes files that parse back, whatever names Flagsmith allows", () => {
@@ -74,10 +74,30 @@ describe("parseFlagFile", () => {
     expect(() => parseFlagFile('environment: Dev\nflags:\n  a:\n    enabled: true\n    value: "sale\x1f"\n', "dev.yaml")).toThrow(/trims/);
   });
 
-  it("accepts an archived flag, with no settings", () => {
-    const file = parseFlagFile("environment: Dev\nflags:\n  old:\n    archived: true\n", "dev.yaml");
-    expect(file.flags.old).toEqual({ archived: true });
-    expect(() => parseFlagFile("environment: Dev\nflags:\n  old:\n    archived: true\n    enabled: true\n", "dev.yaml")).toThrow(/no settings/);
+  it("keeps an archived flag's settings, since Flagsmith still serves them", () => {
+    const file = parseFlagFile("environment: Dev\nflags:\n  old:\n    archived: true\n    enabled: true\n    value: 3\n", "dev.yaml");
+    expect(file.flags.old).toEqual({ archived: true, enabled: true, value: 3 });
+    expect(() => parseFlagFile("environment: Dev\nflags:\n  old:\n    archived: true\n", "dev.yaml")).toThrow(/flags\.old\.enabled: missing/);
+  });
+
+  const named = (name: string) => () =>
+    parseFlagFile(`environment: Dev\nflags:\n  ${JSON.stringify(name)}:\n    enabled: true\n    value: null\n`, "dev.yaml");
+  const valued = (v: string) => () =>
+    parseFlagFile(`environment: Dev\nflags:\n  a:\n    enabled: true\n    value: ${JSON.stringify(v)}\n`, "dev.yaml");
+
+  it("rejects names Flagsmith would trim or refuse", () => {
+    expect(named(" lead")).toThrow(/trims leading and trailing spaces from flag names/);
+    expect(named("trail" + String.fromCharCode(0x3000))).toThrow(/trims/);
+    // Through toYaml, as pull writes them: YAML needs an explicit key over 1024 characters.
+    const long = (n: number) => () => parseFlagFile(toYaml(buildFlagFile("Dev", [feature(1, "x".repeat(n))], [state(1, true)])), "dev.yaml");
+    expect(long(2001)).toThrow(/at most 2000/);
+    expect(long(2000)).not.toThrow();
+  });
+
+  it("trims like Python's strip(): Flagsmith keeps a leading U+FEFF, so it is allowed", () => {
+    expect(valued(String.fromCharCode(0xfeff) + "a")).not.toThrow();
+    expect(valued("a" + String.fromCharCode(0xa0))).toThrow(/trims/);
+    expect(valued(String.fromCharCode(0x2028) + "a")).toThrow(/trims/);
   });
 
   it("explains what is wrong with a bad file", () => {
