@@ -173,6 +173,10 @@ jobs:
           $cli drift | tee drift.txt || true
           grep -q "unarchived outside Git" drift.txt
           expect_exit 1 $cli apply --yes
+          echo "--- archived again: apply runs, and the archived flag's dashboard edit is still drift"
+          curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json"             -d '{"is_archived": true}' "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/features/$legacy/" > /dev/null
+          $cli apply --yes
+          expect_exit 2 $cli drift
 
           # For the Action steps below.
           echo "CI_FLAGS_DIR=$RUNNER_TEMP/e2e/flags" >> "$GITHUB_ENV"
@@ -207,9 +211,8 @@ jobs:
           dir: ${{ env.CI_FLAGS_DIR }}
           issue: "false"
 
-      - name: "Action: apply must refuse while archive state disagrees"
+      - name: "Action: apply (nothing to change: apply leaves archived flags alone)"
         id: apply
-        continue-on-error: true
         uses: ./
         with:
           command: apply
@@ -227,8 +230,8 @@ jobs:
           echo "plan changes=$CHANGES, drift=$DRIFT, apply=$APPLY"
           [ "$CHANGES" = 0 ] || { echo "::error::expected 0 planned changes"; exit 1; }
           [ "$DRIFT" = true ] || { echo "::error::expected drift"; exit 1; }
-          [ "$APPLY" = failure ] || { echo "::error::apply should have refused"; exit 1; }
-          grep -q "unarchived outside Git" "$RUNNER_TEMP/flagops-drift.md"
+          [ "$APPLY" = success ] || { echo "::error::apply failed"; exit 1; }
+          grep -q "archived flag changed outside Git" "$RUNNER_TEMP/flagops-drift.md"
           grep -q "read-only keys" "$RUNNER_TEMP/flagops-plan.md"
 
       - name: Flagsmith logs on failure
