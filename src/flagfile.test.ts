@@ -100,6 +100,26 @@ describe("parseFlagFile", () => {
     expect(valued(String.fromCharCode(0x2028) + "a")).toThrow(/trims/);
   });
 
+  it("reads segment overrides in order, and checks them like flag settings", () => {
+    const base = "environment: Dev\nflags:\n  a:\n    enabled: false\n    value: null\n    segments:\n";
+    const file = parseFlagFile(base + "      - segment: staff\n        enabled: true\n        value: 5\n      - segment: beta\n        enabled: false\n        value: null\n", "dev.yaml");
+    expect(file.flags.a.segments).toEqual([
+      { segment: "staff", enabled: true, value: 5 },
+      { segment: "beta", enabled: false, value: null },
+    ]);
+    expect(parseFlagFile(base.replace("segments:\n", "segments: []\n"), "dev.yaml").flags.a.segments).toEqual([]);
+    expect(() => parseFlagFile(base + "      - segment: b\n        enabled: true\n        value: 1\n      - segment: b\n        enabled: true\n        value: 1\n", "dev.yaml")).toThrow(/"b" is listed twice/);
+    expect(() => parseFlagFile(base + "      - segment: b\n        enabled: true\n        value: 1.5\n", "dev.yaml")).toThrow(/whole numbers/);
+    expect(() => parseFlagFile(base + "      - segment: b\n        enabled: true\n", "dev.yaml")).toThrow(/segments\.0\.value/);
+  });
+
+  it("writes every flag's overrides on pull, an empty list when it has none", () => {
+    const file = buildFlagFile("Dev", [feature(1, "a"), feature(2, "b")], [state(1, true), state(2, false)], new Map([["a", [{ segment: "beta", enabled: false, value: 1 }]]]));
+    expect(file.flags.a.segments).toEqual([{ segment: "beta", enabled: false, value: 1 }]);
+    expect(file.flags.b.segments).toEqual([]);
+    expect(parseFlagFile(toYaml(file), "dev.yaml")).toEqual(file);
+  });
+
   it("explains what is wrong with a bad file", () => {
     expect(() => parseFlagFile("environment: Dev\nflags:\n  a:\n    enabled: maybe\n", "dev.yaml")).toThrow(
       /flags\.a\.enabled/,

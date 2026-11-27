@@ -1,6 +1,6 @@
 // Compare what the YAML files want with what Flagsmith has now.
 
-import { isArchived, type FlagFile } from "./flagfile.js";
+import { isArchived, nameProblem, type FlagEntry, type FlagFile } from "./flagfile.js";
 import type { FlagValue } from "./flagsmith.js";
 import { formatReferences, type Reference } from "./references.js";
 
@@ -9,19 +9,29 @@ export interface FlagSetting {
   value: FlagValue;
 }
 
-// What Flagsmith has now for one environment: flag name -> setting + the id we need to change it.
+// What Flagsmith has now for one environment: flag name -> setting + the ids we need to change it.
 // Archived flags are included: Flagsmith still serves them to SDKs.
-export type LiveFlags = Map<string, FlagSetting & { stateId: number }>;
+export interface LiveOverride extends FlagSetting {
+  segment: string;
+  stateId: number;
+  featureSegmentId: number;
+}
+export type LiveFlag = FlagSetting & { stateId: number; featureId?: number; overrides?: LiveOverride[] };
+export type LiveFlags = Map<string, LiveFlag>;
 
 export type Change =
   | { kind: "update"; flag: string; before: FlagSetting; after: FlagSetting; stateId: number }
   | { kind: "create"; flag: string; after: FlagSetting }
   | { kind: "untracked"; flag: string; before: FlagSetting }
-  // Marked archived in YAML, and Flagsmith has other settings (or no such flag). Apply leaves
-  // archived flags alone, so this is only reported.
-  | { kind: "archived"; flag: string; before: FlagSetting | null; after: FlagSetting }
+  // Marked archived in YAML but missing from Flagsmith. Apply can't create an archived flag,
+  // so this is only reported.
+  | { kind: "archived"; flag: string; before: null; after: FlagSetting }
   // Archived on one side only. Only the Admin API can see this. Apply stops until they agree.
-  | { kind: "status"; flag: string; archivedInGit: boolean };
+  | { kind: "status"; flag: string; archivedInGit: boolean }
+  // A segment override to add (before null), change, or remove (after null).
+  | { kind: "override"; flag: string; segment: string; before: FlagSetting | null; after: FlagSetting | null; live?: LiveOverride }
+  // The order of a flag's segment overrides (first match wins).
+  | { kind: "order"; flag: string; before: string[]; after: string[] };
 
 export interface EnvironmentPlan {
   environment: string;
@@ -29,6 +39,31 @@ export interface EnvironmentPlan {
 }
 
 const differ = (a: FlagSetting, b: FlagSetting) => a.enabled !== b.enabled || a.value !== b.value;
+const settingOf = (s: FlagSetting): FlagSetting => ({ enabled: s.enabled, value: s.value });
+
+// Segment overrides of one flag, for a flag whose YAML lists "segments".
+function diffOverrides(flag: string, entry: FlagEntry, current: LiveFlag | undefined): Change[] {
+  const wanted = entry.segments ?? [];
+  const live = current?.overrides ?? [];
+  const changes: Change[] = [];
+  for (const w of wanted) {
+    const l = live.find((o) => o.segment === w.segment);
+    if (!l) changes.push({ kind: "override", flag, segment: w.segment, before: null, after: settingOf(w) });
+    else if (differ(l, w)) changes.push({ kind: "override", flag, segment: w.segment, before: settingOf(l), after: settingOf(w), live: l });
+  }
+  for (const l of live) {
+    if (!wanted.some((w) => w.segment === l.segment)) {
+      changes.push({ kind: "override", flag, segment: l.segment, before: settingOf(l), after: null, live: l });
+    }
+  }
+  // Order only matters among overrides that exist on both sides; new ones go where YAML says.
+  const both = wanted.map((w) => w.segment).filter((s) => live.some((l) => l.segment === s));
+  const liveBoth = live.map((l) => l.segment).filter((s) => both.includes(s));
+  if (both.join("\n") !== liveBoth.join("\n")) {
+    changes.push({ kind: "order", flag, before: live.map((l) => l.segment), after: wanted.map((w) => w.segment) });
+  }
+  return changes;
+}
 
 // archivedLive: lowercase names of flags archived in Flagsmith, when the source can tell.
 export function diffEnvironment(wanted: FlagFile, live: LiveFlags, archivedLive?: Set<string>): EnvironmentPlan {
@@ -40,26 +75,30 @@ export function diffEnvironment(wanted: FlagFile, live: LiveFlags, archivedLive?
     const before = current ? { enabled: current.enabled, value: current.value } : null;
     if (current && archivedLive && isArchived(entry) !== archivedLive.has(flag.toLowerCase())) {
       changes.push({ kind: "status", flag, archivedInGit: isArchived(entry) });
-    } else if (isArchived(entry)) {
-      if (!before || differ(before, after)) changes.push({ kind: "archived", flag, before, after });
+      continue; // settle which flags are live first
     } else if (!current || !before) {
-      changes.push({ kind: "create", flag, after });
+      // Flagsmith still serves archived flags, so apply keeps their settings in step like any
+      // other's. It can't create one, though: that would make a live flag.
+      changes.push(isArchived(entry) ? { kind: "archived", flag, before: null, after } : { kind: "create", flag, after });
     } else if (differ(before, after)) {
       changes.push({ kind: "update", flag, before, after, stateId: current.stateId });
     }
+    // No "segments" key: the flag's overrides are left alone, as before FlagOps managed them.
+    if (entry.segments) changes.push(...diffOverrides(flag, entry, current));
   }
 
   for (const [flag, current] of live) {
-    if (!(flag in wanted.flags)) {
+    // Names a flag file can't hold (pull skips them and says why) can't be managed or fixed in Git.
+    if (!(flag in wanted.flags) && !nameProblem(flag)) {
       changes.push({ kind: "untracked", flag, before: { enabled: current.enabled, value: current.value } });
     }
   }
 
-  changes.sort((a, b) => a.flag.localeCompare(b.flag));
+  changes.sort((a, b) => a.flag.localeCompare(b.flag)); // stable: a flag's own changes keep their order
   return { environment: wanted.environment, changes };
 }
 
-const isAction = (c: Change) => c.kind === "update" || c.kind === "create";
+export const isAction = (c: Change) => c.kind === "update" || c.kind === "create" || c.kind === "override" || c.kind === "order";
 
 // Changes that apply would actually make (the other kinds are only reported).
 export function countActions(plans: EnvironmentPlan[]): number {
@@ -106,6 +145,11 @@ const show = (v: FlagValue) => (v === null ? "null" : JSON.stringify(v));
 // Names with control characters are printed quoted, with the characters escaped.
 export const safe = (s: string) => (/[\x00-\x1f\x7f\x85\u2028\u2029]/.test(s) ? JSON.stringify(s) : s);
 
+// Last line of defence for anything printed, error messages included: in a GitHub Actions
+// log a line starting with "::" is a workflow command, and a lone carriage return starts a
+// new line there. Names from Flagsmith can hold either.
+export const guardOutput = (s: string) => s.replace(/\r(?!\n)/g, "\\r").replace(/^(\s*)::/gm, "$1: :");
+
 const setting = (s: FlagSetting) => `${s.enabled ? "on" : "off"}, value ${show(s.value)}`;
 
 function describe(change: Change): string {
@@ -126,13 +170,19 @@ function describe(change: Change): string {
     case "untracked":
       return `  ! ${flag}: in Flagsmith but not in YAML (left alone)`;
     case "archived":
-      return change.before
-        ? `  ! ${flag}: archived; Flagsmith has ${setting(change.before)}, YAML says ${setting(change.after)} (apply leaves archived flags alone)`
-        : `  ! ${flag}: archived in YAML but missing from Flagsmith`;
+      return `  ! ${flag}: archived in YAML but missing from Flagsmith (apply can't create an archived flag)`;
     case "status":
       return change.archivedInGit
         ? `  ! ${flag}: archived in YAML but not in Flagsmith (apply stops until they agree)`
         : `  ! ${flag}: archived in Flagsmith but not in YAML (apply stops until they agree)`;
+    case "override": {
+      const where = `${flag} [segment ${safe(change.segment)}]`;
+      if (!change.before) return `  + ${where}: new override (${setting(change.after!)})`;
+      if (!change.after) return `  - ${where}: override removed (was ${setting(change.before)})`;
+      return `  ~ ${where}: ${setting(change.before)} -> ${setting(change.after)}`;
+    }
+    case "order":
+      return `  ~ ${flag}: segment order ${change.before.map(safe).join(", ")} -> ${change.after.map(safe).join(", ")}`;
   }
 }
 
@@ -146,7 +196,7 @@ export const COMMENT_MARKER = "<!-- flagops-plan -->";
 // Email addresses still autolink after entities are decoded, so an invisible <wbr> follows
 // every @. All of this was checked against GitHub's Markdown renderer.
 export function text(s: string): string {
-  return s.replace(/[^A-Za-z0-9 ,/=?+%-]/g, (c) => `&#${c.codePointAt(0)};${c === "@" ? "<wbr>" : ""}`);
+  return s.replace(/[^A-Za-z0-9 ,/=?+%-]/gu, (c) => `&#${c.codePointAt(0)};${c === "@" ? "<wbr>" : ""}`);
 }
 export const code = (s: string) => `<code>${text(s)}</code>`;
 const plain = (s: string) =>
@@ -190,11 +240,18 @@ function planRow(c: Change): string {
     case "untracked":
       return `| ! | ${code(c.flag)} | ${both(c.before)} | not in YAML, left alone |`;
     case "archived":
-      return `| ! | ${code(c.flag)} | ${c.before ? both(c.before) : "(missing)"} | ${both(c.after)}: archived, left alone |`;
+      return `| ! | ${code(c.flag)} | (missing) | ${both(c.after)}: archived in YAML, can't be created |`;
     case "status":
       return c.archivedInGit
         ? `| ! | ${code(c.flag)} | not archived | archived in YAML: **apply stops** until they agree |`
         : `| ! | ${code(c.flag)} | archived | not archived in YAML: **apply stops** until they agree |`;
+    case "override": {
+      const mark = c.before === null ? "+" : c.after === null ? "-" : "~";
+      return `| ${mark} | ${code(c.flag)} for segment ${code(c.segment)} | ${c.before ? both(c.before) : "(new override)"} | **${c.after ? both(c.after) : "override removed"}** |`;
+    }
+    case "order": {
+      return `| ~ | ${code(c.flag)} segment order | ${c.before.map(code).join(", ")} | **${c.after.map(code).join(", ")}** |`;
+    }
   }
 }
 
@@ -206,14 +263,14 @@ export function formatPlanMarkdown(plans: EnvironmentPlan[], refs?: Map<string, 
   // A long comment gets cut at the end, where production is, so count each environment up front.
   const changed = plans.filter((p) => p.changes.some(isAction));
   if (changed.length > 1) {
-    lines.push("", changed.map((p) => `${text(p.environment)}: ${p.changes.filter(isAction).length}`).join(" · "));
+    lines.push("", changed.map((p) => `${code(p.environment)}: ${p.changes.filter(isAction).length}`).join(" · "));
   }
   for (const note of notes) lines.push("", `> ${note}`);
 
   for (const p of plans) {
     if (p.changes.length === 0) continue;
     const isProd = productionNames.includes(p.environment.toLowerCase());
-    lines.push("", `### ${text(p.environment)}${isProd ? " (production)" : ""}`, "");
+    lines.push("", `### ${code(p.environment)}${isProd ? " (production)" : ""}`, "");
     if (isProd && p.changes.some(isAction)) {
       lines.push("> [!WARNING]", "> Changes production. A reviewer must approve before they apply.", "");
     }
@@ -222,7 +279,7 @@ export function formatPlanMarkdown(plans: EnvironmentPlan[], refs?: Map<string, 
   }
 
   const unchanged = plans.filter((p) => p.changes.length === 0).map((p) => p.environment);
-  if (unchanged.length > 0 && actions > 0) lines.push("", `No changes in: ${unchanged.map(text).join(", ")}.`);
+  if (unchanged.length > 0 && actions > 0) lines.push("", `No changes in: ${unchanged.map(code).join(", ")}.`);
   lines.push(...referencesMarkdown(plans, refs));
   return lines.join("\n") + "\n";
 }
@@ -245,13 +302,19 @@ function describeDrift(c: Change): { git: string; live: string; what: string } {
     case "untracked":
       return { git: "(not in Git)", live: both(c.before), what: "added outside Git" };
     case "archived":
-      return c.before
-        ? { git: `archived, ${both(c.after)}`, live: both(c.before), what: "archived flag changed outside Git" }
-        : { git: `archived, ${both(c.after)}`, live: "missing", what: "deleted outside Git" };
+      return { git: `archived, ${both(c.after)}`, live: "missing", what: "deleted outside Git" };
     case "status":
       return c.archivedInGit
         ? { git: "archived", live: "not archived", what: "unarchived outside Git" }
         : { git: "not archived", live: "archived", what: "archived outside Git" };
+    case "override": {
+      const seg = ` for segment ${code(c.segment)}`;
+      if (!c.before) return { git: `${both(c.after!)}${seg}`, live: "missing", what: "override deleted outside Git" };
+      if (!c.after) return { git: "(not in Git)", live: `${both(c.before)}${seg}`, what: "override added outside Git" };
+      return { git: `${both(c.after)}${seg}`, live: both(c.before), what: "override changed outside Git" };
+    }
+    case "order":
+      return { git: `segments ${c.after.map(code).join(", ")}`, live: `segments ${c.before.map(code).join(", ")}`, what: "segment order changed outside Git" };
   }
 }
 
@@ -265,13 +328,13 @@ export function formatDriftMarkdown(plans: EnvironmentPlan[]): string {
   lines.push(
     "## Flag drift detected",
     "",
-    `**${total} flag${total === 1 ? "" : "s"}** in Flagsmith no longer ${total === 1 ? "matches" : "match"} the flag files in Git. ` +
+    `Flagsmith differs from the flag files in Git in **${total} place${total === 1 ? "" : "s"}**. ` +
       "Someone probably changed them in the Flagsmith dashboard.",
   );
   const drifted = plans.filter((p) => p.changes.length > 0);
-  if (drifted.length > 1) lines.push("", drifted.map((p) => `${text(p.environment)}: ${p.changes.length}`).join(" · "));
+  if (drifted.length > 1) lines.push("", drifted.map((p) => `${code(p.environment)}: ${p.changes.length}`).join(" · "));
   for (const p of drifted) {
-    lines.push("", `### ${text(p.environment)}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
+    lines.push("", `### ${code(p.environment)}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
     for (const c of p.changes) {
       const d = describeDrift(c);
       lines.push(`| ${code(c.flag)} | ${d.git} | **${d.live}** | ${d.what} |`);
@@ -280,7 +343,7 @@ export function formatDriftMarkdown(plans: EnvironmentPlan[]): string {
   lines.push(
     "",
     "**To fix, pick one:**",
-    "- Put Flagsmith back to what Git says: re-run the FlagOps apply workflow (or `flagops apply`). Apply never changes archived flags or archive state; fix those in the dashboard.",
+    "- Put Flagsmith back to what Git says: re-run the FlagOps apply workflow (or `flagops apply`). Apply never archives or unarchives a flag; do that in the dashboard.",
     "- Keep the dashboard change: run `flagops pull` and open a pull request with the updated files.",
     "",
     "This issue closes itself once Flagsmith and Git match again.",
@@ -300,7 +363,7 @@ export function formatDrift(plans: EnvironmentPlan[]): string {
       lines.push(`  ${safe(c.flag)}: Git says ${plain(d.git)}, Flagsmith has ${plain(d.live)} (${d.what})`);
     }
   }
-  lines.push("", `Drift found in ${total} flag${total === 1 ? "" : "s"}.`);
+  lines.push("", `Drift found in ${total} place${total === 1 ? "" : "s"}.`);
   return lines.join("\n");
 }
 

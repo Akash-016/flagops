@@ -3,7 +3,11 @@
 # Flagsmith dashboard). Opens an issue listing the drift, and closes it once fixed.
 #
 # drift only reads flags, so it uses the read-only FLAGSMITH_ENVIRONMENT_KEYS secret
-# (see flagops-plan.yml), never the admin key.
+# (see flagops-plan.yml), never the admin key. Read-only keys can't see whether a flag is
+# archived, so this misses a flag archived or unarchived in the dashboard (settings changes
+# to archived flags are still caught). To catch that too, give the job the admin key instead:
+# add `environment: non-production` to the job and `admin-key: ${{ secrets.FLAGSMITH_ADMIN_KEY }}`
+# in place of environment-keys. That environment only serves main, which is what a schedule runs on.
 #
 # If Flagsmith is only reachable on a private network, use a self-hosted runner
 # instead of ubuntu-latest (see "Security model").

@@ -9,6 +9,7 @@ import { createInterface } from "node:readline/promises";
 import {
   archiveConflicts,
   changedFlags,
+  guardOutput,
   countActions,
   countDrift,
   formatDrift,
@@ -20,6 +21,11 @@ import { findReferences } from "./references.js";
 import { findStaleFlags, formatStale, formatStaleMarkdown } from "./stale.js";
 import { adminSource, buildPlans, keySource, readFlagFiles, type LiveSource } from "./state.js";
 import { applyPlans } from "./apply.js";
+
+for (const method of ["log", "error"] as const) {
+  const write = console[method];
+  console[method] = (...args: unknown[]) => write(...args.map((a) => (typeof a === "string" ? guardOutput(a) : a)));
+}
 
 const program = new Command();
 
@@ -71,6 +77,7 @@ program
     ]);
 
     console.log(`Project ${project.name}: ${features.length} flags, ${environments.length} environments`);
+    const source = adminSource(fs, project.id);
 
     // Read everything before writing anything, so a problem never leaves half the files updated.
     const files: { target: string; file: FlagFile }[] = [];
@@ -78,7 +85,9 @@ program
       const target = path.join(opts.dir, fileNameFor(env.name));
       const other = files.find((f) => f.target === target);
       if (other) throw new Error(`Environments "${other.file.environment}" and "${env.name}" would both be written to ${target}. Rename one in Flagsmith.`);
-      files.push({ target, file: buildFlagFile(env.name, features, await fs.listEnvironmentStates(env.api_key)) });
+      const live = await source.readLive(env);
+      const overrides = new Map([...live].map(([name, l]) => [name, l.overrides ?? []]));
+      files.push({ target, file: buildFlagFile(env.name, features, await fs.listEnvironmentStates(env.api_key), overrides) });
     }
 
     // Flagsmith accepts some names and values that validate rejects (a name with a tab, say).
@@ -217,9 +226,13 @@ program
     const fs = client();
     const project = await resolveProject(fs, opts.project);
     const plans = await buildPlans(adminSource(fs, project.id), opts.dir, opts.env);
-    console.log(formatPlan(plans));
     const conflicts = archiveConflicts(plans);
-    if (conflicts.length > 0) throw new Error(`\nNothing changed:\n${conflicts.join("\n")}`);
+    if (conflicts.length > 0) {
+      // Show the plan without its "N changes to apply" line: none will be.
+      console.log(formatPlan(plans).replace(/\n\n[^\n]*$/, ""));
+      throw new Error(`\nApply stopped; nothing changed:\n${conflicts.join("\n")}`);
+    }
+    console.log(formatPlan(plans));
     if (countActions(plans) === 0) return;
 
     if (!opts.yes) {

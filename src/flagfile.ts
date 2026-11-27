@@ -39,11 +39,22 @@ const flagValue = z
 
 // archived: true marks a flag archived in Flagsmith. Flagsmith still serves archived flags to
 // SDKs, so their settings stay in YAML and drift checks them, but apply never changes them.
+// A segment override: the flag's setting for users in that segment. Segments themselves
+// (their rules) are managed in Flagsmith; YAML refers to them by name.
+const overrideSchema = z.strictObject({
+  segment: z.string().min(1, "segment name missing"),
+  enabled: z.boolean({ error: "missing (true or false)" }),
+  value: flagValue,
+});
+
 const flagSchema = z
   .strictObject({
     archived: z.literal(true).optional(),
     enabled: z.boolean().optional(),
     value: flagValue.optional(),
+    // In priority order: the first segment a user matches wins. Leave the key out to leave
+    // the flag's overrides alone; write [] to have none.
+    segments: z.array(overrideSchema).optional(),
   })
   .superRefine((f, ctx) => {
     if (f.enabled === undefined) ctx.addIssue({ code: "custom", path: ["enabled"], message: "missing (true or false)" });
@@ -51,10 +62,25 @@ const flagSchema = z
     if (f.value === undefined) {
       ctx.addIssue({ code: "custom", path: ["value"], message: "missing (write value: null if the flag has no value)" });
     }
+    const seen = new Set<string>();
+    f.segments?.forEach((o, i) => {
+      if (seen.has(o.segment)) ctx.addIssue({ code: "custom", path: ["segments", i, "segment"], message: `"${o.segment}" is listed twice` });
+      seen.add(o.segment);
+    });
   })
-  .transform((f): FlagEntry => (f.archived ? { archived: true, enabled: f.enabled!, value: f.value! } : { enabled: f.enabled!, value: f.value! }));
+  .transform((f): FlagEntry => ({
+    ...(f.archived ? { archived: true as const } : {}),
+    enabled: f.enabled!,
+    value: f.value!,
+    ...(f.segments ? { segments: f.segments } : {}),
+  }));
 
-export type FlagEntry = { enabled: boolean; value: FlagValue; archived?: true };
+export interface SegmentOverride {
+  segment: string;
+  enabled: boolean;
+  value: FlagValue;
+}
+export type FlagEntry = { enabled: boolean; value: FlagValue; archived?: true; segments?: SegmentOverride[] };
 export const isArchived = (f: FlagEntry): boolean => f.archived === true;
 
 // Any name Flagsmith accepts and stores unchanged: no control characters, no leading or
@@ -94,14 +120,22 @@ export function fileNameFor(environmentName: string): string {
 
 // Turn Flagsmith's features + states into our file shape, sorted by flag name
 // so the same flags always produce the same file (clean diffs in pull requests).
-export function buildFlagFile(environmentName: string, features: Feature[], states: FeatureState[]): FlagFile {
+// overrides: each flag's segment overrides in priority order. When given, every flag gets a
+// "segments" list (empty if it has none), so FlagOps manages them all from then on.
+export function buildFlagFile(
+  environmentName: string,
+  features: Feature[],
+  states: FeatureState[],
+  overrides?: Map<string, SegmentOverride[]>,
+): FlagFile {
   const stateByFeature = new Map(states.map((s) => [s.feature, s]));
   const flags: FlagFile["flags"] = {};
   for (const f of [...features].sort((a, b) => a.name.localeCompare(b.name))) {
     const state = stateByFeature.get(f.id);
     if (!state) continue;
-    const setting = { enabled: state.enabled, value: state.feature_state_value ?? null };
-    flags[f.name] = f.is_archived ? { archived: true, ...setting } : setting;
+    const entry: FlagEntry = { enabled: state.enabled, value: state.feature_state_value ?? null };
+    if (overrides) entry.segments = (overrides.get(f.name) ?? []).map((o) => ({ segment: o.segment, enabled: o.enabled, value: o.value }));
+    flags[f.name] = f.is_archived ? { archived: true, ...entry } : entry;
   }
   return { environment: environmentName, flags };
 }
@@ -111,7 +145,13 @@ export function toYaml(file: FlagFile): string {
 }
 
 export function parseFlagFile(text: string, source: string): FlagFile {
-  const result = flagFileSchema.safeParse(YAML.parse(text));
+  let data: unknown;
+  try {
+    data = YAML.parse(text);
+  } catch (err) {
+    throw new Error(`${source} is not valid YAML: ${(err as Error).message}`);
+  }
+  const result = flagFileSchema.safeParse(data);
   if (!result.success) {
     const problems = result.error.issues.map((i) => `  ${i.path.join(".") || "(top)"}: ${i.message}`).join("\n");
     throw new Error(`${source} is not a valid flag file:\n${problems}`);

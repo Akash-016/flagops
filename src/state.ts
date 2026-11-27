@@ -3,8 +3,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseFlagFile, type FlagFile } from "./flagfile.js";
-import { readEnvironmentDocument, type Environment, type EnvironmentDocument, type Feature, type FlagsmithClient } from "./flagsmith.js";
-import { diffEnvironment, sortByEnvironment, type EnvironmentPlan, type LiveFlags } from "./diff.js";
+import { fromTyped, readEnvironmentDocument, type Environment, type EnvironmentDocument, type Feature, type FlagsmithClient } from "./flagsmith.js";
+import { diffEnvironment, sortByEnvironment, type EnvironmentPlan, type LiveFlags, type LiveOverride } from "./diff.js";
 import { checkSameFlags, type NamedFlagFile } from "./validate.js";
 
 // Reads every flag file and runs all offline checks: schema, one file per environment,
@@ -51,7 +51,11 @@ export interface LiveSource {
   // Names of archived flags. Only the Admin API reports them; environment documents
   // include archived flags like any other.
   archived?(): Promise<string[]>;
+  // Names of the project's segments, one entry per segment (names can repeat in Flagsmith).
+  segmentNames(): Promise<string[]>;
 }
+
+const byPriority = (a: { priority: number }, b: { priority: number }) => a.priority - b.priority;
 
 export function adminSource(fs: FlagsmithClient, projectId: number): LiveSource {
   let features: Promise<Feature[]> | undefined;
@@ -64,7 +68,21 @@ export function adminSource(fs: FlagsmithClient, projectId: number): LiveSource 
       const live: LiveFlags = new Map();
       for (const s of await fs.listEnvironmentStates(env.api_key)) {
         const name = nameById.get(s.feature);
-        if (name) live.set(name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.id });
+        if (name) live.set(name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.id, featureId: s.feature, overrides: [] });
+      }
+      // Segment overrides: states from one call, then segment names and priorities per flag
+      // that has any (Flagsmith only lists those per flag).
+      const overrides = await fs.listOverrideStates(env.id);
+      for (const featureId of new Set(overrides.map((o) => o.feature))) {
+        const flag = live.get(nameById.get(featureId) ?? "");
+        if (!flag) continue;
+        const list = [];
+        for (const fseg of await fs.listFeatureSegments(env.id, featureId)) {
+          const state = overrides.find((o) => o.feature === featureId && o.feature_segment === fseg.id);
+          if (!state) continue;
+          list.push({ segment: fseg.segment_name, enabled: state.enabled, value: fromTyped(state.feature_state_value), stateId: state.id, featureSegmentId: fseg.id, priority: fseg.priority });
+        }
+        flag.overrides = list.sort(byPriority).map(({ priority: _, ...o }) => o);
       }
       return live;
     },
@@ -73,6 +91,7 @@ export function adminSource(fs: FlagsmithClient, projectId: number): LiveSource 
       features ??= fs.listFeatures(projectId);
       return (await features).filter((f) => f.is_archived).map((f) => f.name);
     },
+    segmentNames: async () => (await fs.listSegments(projectId)).map((s) => s.name),
   };
 }
 
@@ -80,7 +99,20 @@ export function liveFromDocument(doc: EnvironmentDocument): LiveFlags {
   const live: LiveFlags = new Map();
   for (const s of doc.feature_states) {
     if (s.feature_segment) continue; // segment override, not the environment default
-    live.set(s.feature.name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.django_id });
+    live.set(s.feature.name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.django_id, featureId: s.feature.id, overrides: [] });
+  }
+  // Segment overrides sit under each segment, with their priority.
+  const found = new Map<string, (LiveOverride & { priority: number })[]>();
+  for (const seg of doc.project.segments ?? []) {
+    for (const s of seg.feature_states) {
+      const list = found.get(s.feature.name) ?? [];
+      list.push({ segment: seg.name, enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.django_id, featureSegmentId: 0, priority: s.feature_segment?.priority ?? 0 });
+      found.set(s.feature.name, list);
+    }
+  }
+  for (const [name, list] of found) {
+    const flag = live.get(name);
+    if (flag) flag.overrides = list.sort(byPriority).map(({ priority: _, ...o }) => o);
   }
   return live;
 }
@@ -96,11 +128,14 @@ export async function keySource(apiUrl: string, keys: string[]): Promise<LiveSou
     listEnvironments: async () => envs,
     readLive: async (env) => liveFromDocument(docs.find((d) => d.id === env.id)!),
     missing: "the environment keys only cover",
+    segmentNames: async () => (docs[0]?.project.segments ?? []).map((s) => s.name),
   };
 }
 
 export interface PlannedEnvironment extends EnvironmentPlan {
   env: Environment;
+  featureIds: Map<string, number>; // flags in Flagsmith -> feature id, for apply
+  segmentOrder: Map<string, string[]>; // flags with "segments" in YAML -> segment names in order
 }
 
 // Build the plan for every YAML file. Fails if a file names an environment the source doesn't have.
@@ -130,12 +165,27 @@ export async function buildPlans(source: LiveSource, dir: string, onlyEnvs?: str
       );
     }
     const live = await source.readLive(env);
-    plans.push({ ...diffEnvironment(file, live, archived), env });
+    plans.push({
+      ...diffEnvironment(file, live, archived),
+      env,
+      featureIds: new Map([...live].flatMap(([name, l]) => (l.featureId === undefined ? [] : [[name, l.featureId] as [string, number]]))),
+      segmentOrder: new Map(Object.entries(file.flags).flatMap(([name, e]) => (e.segments ? [[name, e.segments.map((o) => o.segment)] as [string, string[]]] : []))),
+    });
   }
 
   // Flagsmith rejects a new flag whose name matches an existing one in any case, archived or
   // not. Stop here, before apply changes anything, with a message that says what to do.
   const problems: string[] = [];
+  // Overrides name segments, which are defined in Flagsmith. Each name must match exactly one.
+  const used = new Set(files.flatMap((f) => Object.values(f.flags).flatMap((e) => (e.segments ?? []).map((o) => o.segment))));
+  if (used.size > 0) {
+    const names = await source.segmentNames();
+    for (const name of [...used].sort()) {
+      const n = names.filter((s) => s === name).length;
+      if (n === 0) problems.push(`Segment "${name}" isn't in Flagsmith. Create it there first (FlagOps manages overrides, not segment rules).`);
+      if (n > 1) problems.push(`${n} segments in Flagsmith are named "${name}". Rename them so each name is unique.`);
+    }
+  }
   for (const p of plans) {
     const liveNames = new Map(
       p.changes.filter((c) => c.kind === "untracked").map((c) => [c.flag.toLowerCase(), c.flag]),

@@ -11,20 +11,31 @@ const doc: EnvironmentDocument = {
   id: 3,
   name: "Production",
   api_key: "abc",
-  project: { id: 1, name: "Shop" },
+  project: {
+    id: 1,
+    name: "Shop",
+    segments: [
+      { id: 7, name: "beta", feature_states: [{ django_id: 20, feature: { id: 1, name: "checkout_v2" }, enabled: false, feature_state_value: 3, feature_segment: { priority: 1 } }] },
+      { id: 8, name: "staff", feature_states: [{ django_id: 21, feature: { id: 1, name: "checkout_v2" }, enabled: true, feature_state_value: null, feature_segment: { priority: 0 } }] },
+    ],
+  },
   feature_states: [
     { django_id: 10, feature: { id: 1, name: "checkout_v2" }, enabled: true, feature_state_value: "v2", feature_segment: null },
     { django_id: 11, feature: { id: 2, name: "dark_mode" }, enabled: false, feature_state_value: null, feature_segment: null },
-    { django_id: 12, feature: { id: 1, name: "checkout_v2" }, enabled: false, feature_state_value: null, feature_segment: { id: 5 } },
+    { django_id: 12, feature: { id: 1, name: "checkout_v2" }, enabled: false, feature_state_value: null, feature_segment: { priority: 0 } },
   ],
 };
 
 describe("liveFromDocument", () => {
-  it("reads each flag's environment default and skips segment overrides", () => {
+  it("reads each flag's environment default, and its segment overrides in priority order", () => {
     const live = liveFromDocument(doc);
     expect([...live.keys()]).toEqual(["checkout_v2", "dark_mode"]);
-    expect(live.get("checkout_v2")).toEqual({ enabled: true, value: "v2", stateId: 10 });
-    expect(live.get("dark_mode")).toEqual({ enabled: false, value: null, stateId: 11 });
+    expect(live.get("checkout_v2")).toMatchObject({ enabled: true, value: "v2", stateId: 10, featureId: 1 });
+    expect(live.get("checkout_v2")!.overrides!.map((o) => [o.segment, o.enabled, o.value])).toEqual([
+      ["staff", true, null],
+      ["beta", false, 3],
+    ]);
+    expect(live.get("dark_mode")).toEqual({ enabled: false, value: null, stateId: 11, featureId: 2, overrides: [] });
   });
 });
 
@@ -35,6 +46,7 @@ describe("buildPlans", () => {
       new Map(Object.entries(live).map(([name, enabled], i) => [name, { enabled, value: null, stateId: i + 1 }])),
     missing: "Flagsmith only has",
     archived: async () => archived,
+    segmentNames: async () => ["beta", "staff", "twice", "twice"],
   });
 
   async function flagsDir(flags: string[]): Promise<string> {
@@ -62,7 +74,7 @@ describe("buildPlans", () => {
     await expect(applyPlans({} as FlagsmithClient, 1, plans)).rejects.toThrow(/archived in Flagsmith/);
   });
 
-  it("checks an archived flag's settings in both modes, and never applies them", async () => {
+  it("checks and applies an archived flag's settings in both modes, since Flagsmith still serves it", async () => {
     const dir = await archivedDir();
     // Same settings: nothing to report, in admin and read-only mode alike.
     expect((await buildPlans(source({ old: true }, ["old"]), dir))[0].changes).toEqual([]);
@@ -70,11 +82,11 @@ describe("buildPlans", () => {
     // Turned off in the dashboard after archiving: Flagsmith still serves it, so it is drift.
     for (const s of [source({ old: false }, ["old"]), readOnly({ old: false })]) {
       const plans = await buildPlans(s, dir);
-      expect(plans[0].changes).toMatchObject([{ kind: "archived", flag: "old", before: { enabled: false } }]);
+      expect(plans[0].changes).toMatchObject([{ kind: "update", flag: "old", before: { enabled: false } }]);
       expect(countDrift(plans)).toBe(1);
-      expect(countActions(plans)).toBe(0);
+      expect(countActions(plans)).toBe(1);
     }
-    // Deleted from Flagsmith: drift too.
+    // Deleted from Flagsmith: drift, but apply can't create an archived flag.
     expect((await buildPlans(readOnly({}), dir))[0].changes).toMatchObject([{ kind: "archived", flag: "old", before: null }]);
   });
 
@@ -95,6 +107,28 @@ describe("buildPlans", () => {
   it("stops when a new flag differs from a live one only in case", async () => {
     const dir = await flagsDir(["Dark_Mode"]);
     await expect(buildPlans(source({ dark_mode: true }), dir)).rejects.toThrow(/differs only in case from "dark_mode"/);
+  });
+
+  it("stops when YAML names a segment that's missing or not unique in Flagsmith", async () => {
+    const dir = await flagsDir([]);
+    const seg = (name: string) => `environment: Production
+flags:
+  a:
+    enabled: true
+    value: null
+    segments:
+      - segment: ${name}
+        enabled: true
+        value: null
+`;
+    await writeFile(path.join(dir, "production.yaml"), seg("nope"));
+    await expect(buildPlans(source({ a: true }), dir)).rejects.toThrow(/Segment "nope" isn't in Flagsmith/);
+    await writeFile(path.join(dir, "production.yaml"), seg("twice"));
+    await expect(buildPlans(source({ a: true }), dir)).rejects.toThrow(/2 segments in Flagsmith are named "twice"/);
+    await writeFile(path.join(dir, "production.yaml"), seg("beta"));
+    const [plan] = await buildPlans(source({ a: true }), dir);
+    expect(plan.changes).toMatchObject([{ kind: "override", flag: "a", segment: "beta", before: null }]);
+    expect(plan.segmentOrder.get("a")).toEqual(["beta"]);
   });
 
   it("plans normally otherwise", async () => {

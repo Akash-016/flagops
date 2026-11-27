@@ -10961,6 +10961,17 @@ function getEnvironmentKeys() {
 }
 
 // src/flagsmith.ts
+function fromTyped(v) {
+  if (!v) return null;
+  if (v.type === "int") return v.integer_value ?? null;
+  if (v.type === "bool") return v.boolean_value ?? null;
+  return v.string_value ?? null;
+}
+function toTyped(v) {
+  if (typeof v === "number") return { type: "int", integer_value: v };
+  if (typeof v === "boolean") return { type: "bool", boolean_value: v };
+  return { type: "unicode", string_value: v };
+}
 var TIMEOUT_MS = (Number(process.env.FLAGSMITH_TIMEOUT) || 30) * 1e3;
 async function fetchWithRetry(url2, init) {
   const method = init.method ?? "GET";
@@ -10983,7 +10994,7 @@ async function fetchWithRetry(url2, init) {
   }
 }
 async function errorBody(res) {
-  const body = (await res.text()).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  const body = (await res.text()).replace(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
   return body.length > 300 ? `${body.slice(0, 300)}...` : body;
 }
 async function readEnvironmentDocument(apiUrl, serverKey) {
@@ -11027,7 +11038,7 @@ var FlagsmithClient = class {
       seen.add(url2);
       const page = await this.request(url2);
       items.push(...page.results);
-      url2 = page.next;
+      url2 = page.next && new URL(new URL(page.next).pathname + new URL(page.next).search, this.apiUrl).href;
     }
     return items;
   }
@@ -11058,6 +11069,52 @@ var FlagsmithClient = class {
   async findEnvironmentState(envApiKey, featureId) {
     const states = await this.getAll(`/environments/${envApiKey}/featurestates/?feature=${featureId}`);
     return states.find((s) => s.feature === featureId && s.identity === null && s.feature_segment === null);
+  }
+  // --- Segment overrides. Checked against Flagsmith 2.295.
+  listSegments(projectId) {
+    return this.getAll(`/projects/${projectId}/segments/`);
+  }
+  // Every segment override state in an environment (not identity overrides).
+  async listOverrideStates(environmentId) {
+    const states = await this.getAll(`/features/featurestates/?environment=${environmentId}`);
+    return states.filter((s) => s.identity === null && s.feature_segment !== null);
+  }
+  // One flag's overrides in one environment, with segment names and priorities.
+  listFeatureSegments(environmentId, featureId) {
+    return this.getAll(`/features/feature-segments/?environment=${environmentId}&feature=${featureId}`);
+  }
+  // New overrides go to the end of the flag's list.
+  createOverride(envApiKey, featureId, segmentId, enabled, value) {
+    return this.request(`${this.apiUrl}/environments/${envApiKey}/features/${featureId}/create-segment-override/`, {
+      method: "POST",
+      body: JSON.stringify({ enabled, feature_state_value: toTyped(value), feature_segment: { segment: segmentId } })
+    });
+  }
+  // Flagsmith answers 500 unless feature, environment and feature_segment are sent too.
+  updateOverride(o, enabled, value) {
+    return this.request(`${this.apiUrl}/features/featurestates/${o.stateId}/`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        feature: o.featureId,
+        environment: o.environmentId,
+        feature_segment: o.featureSegmentId,
+        enabled,
+        feature_state_value: toTyped(value)
+      })
+    });
+  }
+  async deleteOverride(featureSegmentId) {
+    const res = await fetchWithRetry(`${this.apiUrl}/features/feature-segments/${featureSegmentId}/`, {
+      method: "DELETE",
+      headers: { Authorization: `Api-Key ${this.adminKey}` }
+    });
+    if (!res.ok) throw new Error(`Flagsmith DELETE feature-segments/${featureSegmentId}/ failed: ${res.status} ${await errorBody(res)}`);
+  }
+  setPriorities(order) {
+    return this.request(`${this.apiUrl}/features/feature-segments/update-priorities/`, {
+      method: "POST",
+      body: JSON.stringify(order)
+    });
   }
   updateState(envApiKey, stateId, change) {
     return this.request(`${this.apiUrl}/environments/${envApiKey}/featurestates/${stateId}/`, {
@@ -26739,9 +26796,9 @@ function processSchema(schema, ctx, _params = { path: [], schemaPath: [] }) {
   ctx.seen.set(schema, result);
   ctx.sharedDefsExtractedFor = void 0;
   ctx.sharedEmitDoneFor = void 0;
-  const overrideSchema = schema._zod.toJSONSchema?.();
-  if (overrideSchema) {
-    result.schema = overrideSchema;
+  const overrideSchema2 = schema._zod.toJSONSchema?.();
+  if (overrideSchema2) {
+    result.schema = overrideSchema2;
   } else {
     const params = {
       ..._params,
@@ -30800,16 +30857,34 @@ var flagValue = external_exports.union([external_exports.string(), external_expo
     else if (EDGE_SPACE.test(v)) problem("Flagsmith trims leading and trailing spaces; remove them");
   }
 });
+var overrideSchema = external_exports.strictObject({
+  segment: external_exports.string().min(1, "segment name missing"),
+  enabled: external_exports.boolean({ error: "missing (true or false)" }),
+  value: flagValue
+});
 var flagSchema = external_exports.strictObject({
   archived: external_exports.literal(true).optional(),
   enabled: external_exports.boolean().optional(),
-  value: flagValue.optional()
+  value: flagValue.optional(),
+  // In priority order: the first segment a user matches wins. Leave the key out to leave
+  // the flag's overrides alone; write [] to have none.
+  segments: external_exports.array(overrideSchema).optional()
 }).superRefine((f, ctx) => {
   if (f.enabled === void 0) ctx.addIssue({ code: "custom", path: ["enabled"], message: "missing (true or false)" });
   if (f.value === void 0) {
     ctx.addIssue({ code: "custom", path: ["value"], message: "missing (write value: null if the flag has no value)" });
   }
-}).transform((f) => f.archived ? { archived: true, enabled: f.enabled, value: f.value } : { enabled: f.enabled, value: f.value });
+  const seen = /* @__PURE__ */ new Set();
+  f.segments?.forEach((o, i) => {
+    if (seen.has(o.segment)) ctx.addIssue({ code: "custom", path: ["segments", i, "segment"], message: `"${o.segment}" is listed twice` });
+    seen.add(o.segment);
+  });
+}).transform((f) => ({
+  ...f.archived ? { archived: true } : {},
+  enabled: f.enabled,
+  value: f.value,
+  ...f.segments ? { segments: f.segments } : {}
+}));
 var isArchived = (f) => f.archived === true;
 var BAD_NAME = /[\x00-\x1f\x7f]/;
 function nameProblem(name) {
@@ -30834,14 +30909,15 @@ var flagFileSchema = external_exports.strictObject({
 function fileNameFor(environmentName) {
   return environmentName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".yaml";
 }
-function buildFlagFile(environmentName, features, states) {
+function buildFlagFile(environmentName, features, states, overrides) {
   const stateByFeature = new Map(states.map((s) => [s.feature, s]));
   const flags = {};
   for (const f of [...features].sort((a, b) => a.name.localeCompare(b.name))) {
     const state = stateByFeature.get(f.id);
     if (!state) continue;
-    const setting2 = { enabled: state.enabled, value: state.feature_state_value ?? null };
-    flags[f.name] = f.is_archived ? { archived: true, ...setting2 } : setting2;
+    const entry = { enabled: state.enabled, value: state.feature_state_value ?? null };
+    if (overrides) entry.segments = (overrides.get(f.name) ?? []).map((o) => ({ segment: o.segment, enabled: o.enabled, value: o.value }));
+    flags[f.name] = f.is_archived ? { archived: true, ...entry } : entry;
   }
   return { environment: environmentName, flags };
 }
@@ -30849,7 +30925,13 @@ function toYaml(file2) {
   return import_yaml.default.stringify(file2);
 }
 function parseFlagFile(text2, source) {
-  const result = flagFileSchema.safeParse(import_yaml.default.parse(text2));
+  let data;
+  try {
+    data = import_yaml.default.parse(text2);
+  } catch (err) {
+    throw new Error(`${source} is not valid YAML: ${err.message}`);
+  }
+  const result = flagFileSchema.safeParse(data);
   if (!result.success) {
     const problems = result.error.issues.map((i) => `  ${i.path.join(".") || "(top)"}: ${i.message}`).join("\n");
     throw new Error(`${source} is not a valid flag file:
@@ -30957,6 +31039,28 @@ function formatReferences(refs, max = 5) {
 
 // src/diff.ts
 var differ = (a, b) => a.enabled !== b.enabled || a.value !== b.value;
+var settingOf = (s) => ({ enabled: s.enabled, value: s.value });
+function diffOverrides(flag, entry, current) {
+  const wanted = entry.segments ?? [];
+  const live = current?.overrides ?? [];
+  const changes = [];
+  for (const w of wanted) {
+    const l = live.find((o) => o.segment === w.segment);
+    if (!l) changes.push({ kind: "override", flag, segment: w.segment, before: null, after: settingOf(w) });
+    else if (differ(l, w)) changes.push({ kind: "override", flag, segment: w.segment, before: settingOf(l), after: settingOf(w), live: l });
+  }
+  for (const l of live) {
+    if (!wanted.some((w) => w.segment === l.segment)) {
+      changes.push({ kind: "override", flag, segment: l.segment, before: settingOf(l), after: null, live: l });
+    }
+  }
+  const both2 = wanted.map((w) => w.segment).filter((s) => live.some((l) => l.segment === s));
+  const liveBoth = live.map((l) => l.segment).filter((s) => both2.includes(s));
+  if (both2.join("\n") !== liveBoth.join("\n")) {
+    changes.push({ kind: "order", flag, before: live.map((l) => l.segment), after: wanted.map((w) => w.segment) });
+  }
+  return changes;
+}
 function diffEnvironment(wanted, live, archivedLive) {
   const changes = [];
   for (const [flag, entry] of Object.entries(wanted.flags)) {
@@ -30965,23 +31069,23 @@ function diffEnvironment(wanted, live, archivedLive) {
     const before = current ? { enabled: current.enabled, value: current.value } : null;
     if (current && archivedLive && isArchived(entry) !== archivedLive.has(flag.toLowerCase())) {
       changes.push({ kind: "status", flag, archivedInGit: isArchived(entry) });
-    } else if (isArchived(entry)) {
-      if (!before || differ(before, after)) changes.push({ kind: "archived", flag, before, after });
+      continue;
     } else if (!current || !before) {
-      changes.push({ kind: "create", flag, after });
+      changes.push(isArchived(entry) ? { kind: "archived", flag, before: null, after } : { kind: "create", flag, after });
     } else if (differ(before, after)) {
       changes.push({ kind: "update", flag, before, after, stateId: current.stateId });
     }
+    if (entry.segments) changes.push(...diffOverrides(flag, entry, current));
   }
   for (const [flag, current] of live) {
-    if (!(flag in wanted.flags)) {
+    if (!(flag in wanted.flags) && !nameProblem(flag)) {
       changes.push({ kind: "untracked", flag, before: { enabled: current.enabled, value: current.value } });
     }
   }
   changes.sort((a, b) => a.flag.localeCompare(b.flag));
   return { environment: wanted.environment, changes };
 }
-var isAction = (c) => c.kind === "update" || c.kind === "create";
+var isAction = (c) => c.kind === "update" || c.kind === "create" || c.kind === "override" || c.kind === "order";
 function countActions(plans) {
   return plans.reduce((n, p) => n + p.changes.filter(isAction).length, 0);
 }
@@ -31012,6 +31116,7 @@ function sortByEnvironment(plans) {
 }
 var show = (v) => v === null ? "null" : JSON.stringify(v);
 var safe = (s) => /[\x00-\x1f\x7f\x85\u2028\u2029]/.test(s) ? JSON.stringify(s) : s;
+var guardOutput = (s) => s.replace(/\r(?!\n)/g, "\\r").replace(/^(\s*)::/gm, "$1: :");
 var setting = (s) => `${s.enabled ? "on" : "off"}, value ${show(s.value)}`;
 function describe3(change) {
   const flag = safe(change.flag);
@@ -31031,14 +31136,22 @@ function describe3(change) {
     case "untracked":
       return `  ! ${flag}: in Flagsmith but not in YAML (left alone)`;
     case "archived":
-      return change.before ? `  ! ${flag}: archived; Flagsmith has ${setting(change.before)}, YAML says ${setting(change.after)} (apply leaves archived flags alone)` : `  ! ${flag}: archived in YAML but missing from Flagsmith`;
+      return `  ! ${flag}: archived in YAML but missing from Flagsmith (apply can't create an archived flag)`;
     case "status":
       return change.archivedInGit ? `  ! ${flag}: archived in YAML but not in Flagsmith (apply stops until they agree)` : `  ! ${flag}: archived in Flagsmith but not in YAML (apply stops until they agree)`;
+    case "override": {
+      const where = `${flag} [segment ${safe(change.segment)}]`;
+      if (!change.before) return `  + ${where}: new override (${setting(change.after)})`;
+      if (!change.after) return `  - ${where}: override removed (was ${setting(change.before)})`;
+      return `  ~ ${where}: ${setting(change.before)} -> ${setting(change.after)}`;
+    }
+    case "order":
+      return `  ~ ${flag}: segment order ${change.before.map(safe).join(", ")} -> ${change.after.map(safe).join(", ")}`;
   }
 }
 var COMMENT_MARKER = "<!-- flagops-plan -->";
 function text(s) {
-  return s.replace(/[^A-Za-z0-9 ,/=?+%-]/g, (c) => `&#${c.codePointAt(0)};${c === "@" ? "<wbr>" : ""}`);
+  return s.replace(/[^A-Za-z0-9 ,/=?+%-]/gu, (c) => `&#${c.codePointAt(0)};${c === "@" ? "<wbr>" : ""}`);
 }
 var code = (s) => `<code>${text(s)}</code>`;
 var plain = (s) => s.replace(/<\/?code>|<wbr>/g, "").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
@@ -31076,9 +31189,16 @@ function planRow(c) {
     case "untracked":
       return `| ! | ${code(c.flag)} | ${both(c.before)} | not in YAML, left alone |`;
     case "archived":
-      return `| ! | ${code(c.flag)} | ${c.before ? both(c.before) : "(missing)"} | ${both(c.after)}: archived, left alone |`;
+      return `| ! | ${code(c.flag)} | (missing) | ${both(c.after)}: archived in YAML, can't be created |`;
     case "status":
       return c.archivedInGit ? `| ! | ${code(c.flag)} | not archived | archived in YAML: **apply stops** until they agree |` : `| ! | ${code(c.flag)} | archived | not archived in YAML: **apply stops** until they agree |`;
+    case "override": {
+      const mark = c.before === null ? "+" : c.after === null ? "-" : "~";
+      return `| ${mark} | ${code(c.flag)} for segment ${code(c.segment)} | ${c.before ? both(c.before) : "(new override)"} | **${c.after ? both(c.after) : "override removed"}** |`;
+    }
+    case "order": {
+      return `| ~ | ${code(c.flag)} segment order | ${c.before.map(code).join(", ")} | **${c.after.map(code).join(", ")}** |`;
+    }
   }
 }
 function formatPlanMarkdown(plans, refs, notes = []) {
@@ -31087,13 +31207,13 @@ function formatPlanMarkdown(plans, refs, notes = []) {
   lines.push(actions === 0 ? "No flag changes." : `**${changesLabel(actions)}** will be applied when this is merged.`);
   const changed = plans.filter((p) => p.changes.some(isAction));
   if (changed.length > 1) {
-    lines.push("", changed.map((p) => `${text(p.environment)}: ${p.changes.filter(isAction).length}`).join(" \xB7 "));
+    lines.push("", changed.map((p) => `${code(p.environment)}: ${p.changes.filter(isAction).length}`).join(" \xB7 "));
   }
   for (const note of notes) lines.push("", `> ${note}`);
   for (const p of plans) {
     if (p.changes.length === 0) continue;
     const isProd = productionNames.includes(p.environment.toLowerCase());
-    lines.push("", `### ${text(p.environment)}${isProd ? " (production)" : ""}`, "");
+    lines.push("", `### ${code(p.environment)}${isProd ? " (production)" : ""}`, "");
     if (isProd && p.changes.some(isAction)) {
       lines.push("> [!WARNING]", "> Changes production. A reviewer must approve before they apply.", "");
     }
@@ -31101,7 +31221,7 @@ function formatPlanMarkdown(plans, refs, notes = []) {
     for (const c of p.changes) lines.push(planRow(c));
   }
   const unchanged = plans.filter((p) => p.changes.length === 0).map((p) => p.environment);
-  if (unchanged.length > 0 && actions > 0) lines.push("", `No changes in: ${unchanged.map(text).join(", ")}.`);
+  if (unchanged.length > 0 && actions > 0) lines.push("", `No changes in: ${unchanged.map(code).join(", ")}.`);
   lines.push(...referencesMarkdown(plans, refs));
   return lines.join("\n") + "\n";
 }
@@ -31118,9 +31238,17 @@ function describeDrift(c) {
     case "untracked":
       return { git: "(not in Git)", live: both(c.before), what: "added outside Git" };
     case "archived":
-      return c.before ? { git: `archived, ${both(c.after)}`, live: both(c.before), what: "archived flag changed outside Git" } : { git: `archived, ${both(c.after)}`, live: "missing", what: "deleted outside Git" };
+      return { git: `archived, ${both(c.after)}`, live: "missing", what: "deleted outside Git" };
     case "status":
       return c.archivedInGit ? { git: "archived", live: "not archived", what: "unarchived outside Git" } : { git: "not archived", live: "archived", what: "archived outside Git" };
+    case "override": {
+      const seg = ` for segment ${code(c.segment)}`;
+      if (!c.before) return { git: `${both(c.after)}${seg}`, live: "missing", what: "override deleted outside Git" };
+      if (!c.after) return { git: "(not in Git)", live: `${both(c.before)}${seg}`, what: "override added outside Git" };
+      return { git: `${both(c.after)}${seg}`, live: both(c.before), what: "override changed outside Git" };
+    }
+    case "order":
+      return { git: `segments ${c.after.map(code).join(", ")}`, live: `segments ${c.before.map(code).join(", ")}`, what: "segment order changed outside Git" };
   }
 }
 function formatDriftMarkdown(plans) {
@@ -31133,12 +31261,12 @@ function formatDriftMarkdown(plans) {
   lines.push(
     "## Flag drift detected",
     "",
-    `**${total} flag${total === 1 ? "" : "s"}** in Flagsmith no longer ${total === 1 ? "matches" : "match"} the flag files in Git. Someone probably changed them in the Flagsmith dashboard.`
+    `Flagsmith differs from the flag files in Git in **${total} place${total === 1 ? "" : "s"}**. Someone probably changed them in the Flagsmith dashboard.`
   );
   const drifted = plans.filter((p) => p.changes.length > 0);
-  if (drifted.length > 1) lines.push("", drifted.map((p) => `${text(p.environment)}: ${p.changes.length}`).join(" \xB7 "));
+  if (drifted.length > 1) lines.push("", drifted.map((p) => `${code(p.environment)}: ${p.changes.length}`).join(" \xB7 "));
   for (const p of drifted) {
-    lines.push("", `### ${text(p.environment)}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
+    lines.push("", `### ${code(p.environment)}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
     for (const c of p.changes) {
       const d = describeDrift(c);
       lines.push(`| ${code(c.flag)} | ${d.git} | **${d.live}** | ${d.what} |`);
@@ -31147,7 +31275,7 @@ function formatDriftMarkdown(plans) {
   lines.push(
     "",
     "**To fix, pick one:**",
-    "- Put Flagsmith back to what Git says: re-run the FlagOps apply workflow (or `flagops apply`). Apply never changes archived flags or archive state; fix those in the dashboard.",
+    "- Put Flagsmith back to what Git says: re-run the FlagOps apply workflow (or `flagops apply`). Apply never archives or unarchives a flag; do that in the dashboard.",
     "- Keep the dashboard change: run `flagops pull` and open a pull request with the updated files.",
     "",
     "This issue closes itself once Flagsmith and Git match again."
@@ -31166,7 +31294,7 @@ function formatDrift(plans) {
       lines.push(`  ${safe(c.flag)}: Git says ${plain(d.git)}, Flagsmith has ${plain(d.live)} (${d.what})`);
     }
   }
-  lines.push("", `Drift found in ${total} flag${total === 1 ? "" : "s"}.`);
+  lines.push("", `Drift found in ${total} place${total === 1 ? "" : "s"}.`);
   return lines.join("\n");
 }
 function formatPlan(plans, refs) {
@@ -31306,6 +31434,7 @@ async function readNamedFlagFiles(dir) {
   }
   return files;
 }
+var byPriority = (a, b) => a.priority - b.priority;
 function adminSource(fs2, projectId) {
   let features;
   return {
@@ -31316,7 +31445,19 @@ function adminSource(fs2, projectId) {
       const live = /* @__PURE__ */ new Map();
       for (const s of await fs2.listEnvironmentStates(env.api_key)) {
         const name = nameById.get(s.feature);
-        if (name) live.set(name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.id });
+        if (name) live.set(name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.id, featureId: s.feature, overrides: [] });
+      }
+      const overrides = await fs2.listOverrideStates(env.id);
+      for (const featureId of new Set(overrides.map((o) => o.feature))) {
+        const flag = live.get(nameById.get(featureId) ?? "");
+        if (!flag) continue;
+        const list = [];
+        for (const fseg of await fs2.listFeatureSegments(env.id, featureId)) {
+          const state = overrides.find((o) => o.feature === featureId && o.feature_segment === fseg.id);
+          if (!state) continue;
+          list.push({ segment: fseg.segment_name, enabled: state.enabled, value: fromTyped(state.feature_state_value), stateId: state.id, featureSegmentId: fseg.id, priority: fseg.priority });
+        }
+        flag.overrides = list.sort(byPriority).map(({ priority: _, ...o }) => o);
       }
       return live;
     },
@@ -31324,14 +31465,27 @@ function adminSource(fs2, projectId) {
     async archived() {
       features ??= fs2.listFeatures(projectId);
       return (await features).filter((f) => f.is_archived).map((f) => f.name);
-    }
+    },
+    segmentNames: async () => (await fs2.listSegments(projectId)).map((s) => s.name)
   };
 }
 function liveFromDocument(doc) {
   const live = /* @__PURE__ */ new Map();
   for (const s of doc.feature_states) {
     if (s.feature_segment) continue;
-    live.set(s.feature.name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.django_id });
+    live.set(s.feature.name, { enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.django_id, featureId: s.feature.id, overrides: [] });
+  }
+  const found = /* @__PURE__ */ new Map();
+  for (const seg of doc.project.segments ?? []) {
+    for (const s of seg.feature_states) {
+      const list = found.get(s.feature.name) ?? [];
+      list.push({ segment: seg.name, enabled: s.enabled, value: s.feature_state_value ?? null, stateId: s.django_id, featureSegmentId: 0, priority: s.feature_segment?.priority ?? 0 });
+      found.set(s.feature.name, list);
+    }
+  }
+  for (const [name, list] of found) {
+    const flag = live.get(name);
+    if (flag) flag.overrides = list.sort(byPriority).map(({ priority: _, ...o }) => o);
   }
   return live;
 }
@@ -31345,7 +31499,8 @@ async function keySource(apiUrl, keys) {
   return {
     listEnvironments: async () => envs,
     readLive: async (env) => liveFromDocument(docs.find((d) => d.id === env.id)),
-    missing: "the environment keys only cover"
+    missing: "the environment keys only cover",
+    segmentNames: async () => (docs[0]?.project.segments ?? []).map((s) => s.name)
   };
 }
 async function buildPlans(source, dir, onlyEnvs) {
@@ -31368,9 +31523,23 @@ async function buildPlans(source, dir, onlyEnvs) {
       );
     }
     const live = await source.readLive(env);
-    plans.push({ ...diffEnvironment(file2, live, archived), env });
+    plans.push({
+      ...diffEnvironment(file2, live, archived),
+      env,
+      featureIds: new Map([...live].flatMap(([name, l]) => l.featureId === void 0 ? [] : [[name, l.featureId]])),
+      segmentOrder: new Map(Object.entries(file2.flags).flatMap(([name, e]) => e.segments ? [[name, e.segments.map((o) => o.segment)]] : []))
+    });
   }
   const problems = [];
+  const used = new Set(files.flatMap((f) => Object.values(f.flags).flatMap((e) => (e.segments ?? []).map((o) => o.segment))));
+  if (used.size > 0) {
+    const names = await source.segmentNames();
+    for (const name of [...used].sort()) {
+      const n = names.filter((s) => s === name).length;
+      if (n === 0) problems.push(`Segment "${name}" isn't in Flagsmith. Create it there first (FlagOps manages overrides, not segment rules).`);
+      if (n > 1) problems.push(`${n} segments in Flagsmith are named "${name}". Rename them so each name is unique.`);
+    }
+  }
   for (const p of plans) {
     const liveNames = new Map(
       p.changes.filter((c) => c.kind === "untracked").map((c) => [c.flag.toLowerCase(), c.flag])
@@ -31390,28 +31559,64 @@ async function applyPlans(fs2, projectId, plans) {
   if (conflicts.length > 0) throw new Error(conflicts.join("\n"));
   const applied = [];
   const created = /* @__PURE__ */ new Map();
+  let segmentIds;
+  const featureIdOf = (plan, flag) => {
+    const id = created.get(flag) ?? plan.featureIds.get(flag);
+    if (id === void 0) throw new Error("flag not found in Flagsmith");
+    return id;
+  };
   for (const plan of plans) {
+    const touched = /* @__PURE__ */ new Set();
     for (const change of plan.changes) {
-      if (change.kind !== "update" && change.kind !== "create") continue;
-      const what = `${safe(plan.environment)}: ${change.kind === "create" ? "+" : "~"} ${safe(change.flag)}`;
+      if (!isAction(change)) continue;
+      const what = `${safe(plan.environment)}: ${describeAction(change)}`;
       try {
-        let stateId;
-        if (change.kind === "update") {
-          stateId = change.stateId;
-        } else {
-          let featureId = created.get(change.flag);
-          if (featureId === void 0) {
-            featureId = (await fs2.createFeature(projectId, change.flag)).id;
-            created.set(change.flag, featureId);
+        if (change.kind === "update" || change.kind === "create") {
+          let stateId;
+          if (change.kind === "update") {
+            stateId = change.stateId;
+          } else {
+            let featureId = created.get(change.flag);
+            if (featureId === void 0) {
+              featureId = (await fs2.createFeature(projectId, change.flag)).id;
+              created.set(change.flag, featureId);
+            }
+            const state = await fs2.findEnvironmentState(plan.env.api_key, featureId);
+            if (!state) throw new Error("flag was created but has no state in this environment");
+            stateId = state.id;
           }
-          const state = await fs2.findEnvironmentState(plan.env.api_key, featureId);
-          if (!state) throw new Error("flag was created but has no state in this environment");
-          stateId = state.id;
+          await fs2.updateState(plan.env.api_key, stateId, {
+            enabled: change.after.enabled,
+            feature_state_value: change.after.value
+          });
+        } else if (change.kind === "override") {
+          const featureId = featureIdOf(plan, change.flag);
+          if (!change.live) {
+            segmentIds ??= new Map((await fs2.listSegments(projectId)).map((s) => [s.name, s.id]));
+            const segmentId = segmentIds.get(change.segment);
+            if (segmentId === void 0) throw new Error(`segment "${change.segment}" not found`);
+            await fs2.createOverride(plan.env.api_key, featureId, segmentId, change.after.enabled, change.after.value);
+          } else if (!change.after) {
+            await fs2.deleteOverride(change.live.featureSegmentId);
+          } else {
+            const o = { stateId: change.live.stateId, featureId, environmentId: plan.env.id, featureSegmentId: change.live.featureSegmentId };
+            await fs2.updateOverride(o, change.after.enabled, change.after.value);
+          }
         }
-        await fs2.updateState(plan.env.api_key, stateId, {
-          enabled: change.after.enabled,
-          feature_state_value: change.after.value
-        });
+        if (change.kind === "override" || change.kind === "order") touched.add(change.flag);
+        if (change.kind !== "order") applied.push(what);
+      } catch (err) {
+        return { applied, failed: { what, error: err.message } };
+      }
+    }
+    for (const flag of touched) {
+      const wanted = plan.segmentOrder.get(flag) ?? [];
+      const what = `${safe(plan.environment)}: ~ ${safe(flag)} segment order ${wanted.map(safe).join(", ")}`;
+      try {
+        const live = (await fs2.listFeatureSegments(plan.env.id, featureIdOf(plan, flag))).sort((a, b) => a.priority - b.priority);
+        if (live.map((l) => l.segment_name).join("\n") === wanted.join("\n")) continue;
+        const ids = new Map(live.map((l) => [l.segment_name, l.id]));
+        await fs2.setPriorities(wanted.map((name, priority) => ({ id: ids.get(name), priority })));
         applied.push(what);
       } catch (err) {
         return { applied, failed: { what, error: err.message } };
@@ -31420,8 +31625,19 @@ async function applyPlans(fs2, projectId, plans) {
   }
   return { applied };
 }
+function describeAction(c) {
+  if (c.kind === "override") {
+    const mark = c.before === null ? "+" : c.after === null ? "-" : "~";
+    return `${mark} ${safe(c.flag)} [segment ${safe(c.segment)}]`;
+  }
+  return `${c.kind === "create" ? "+" : "~"} ${safe(c.flag)}`;
+}
 
 // src/cli.ts
+for (const method of ["log", "error"]) {
+  const write = console[method];
+  console[method] = (...args) => write(...args.map((a) => typeof a === "string" ? guardOutput(a) : a));
+}
 var program2 = new Command();
 program2.name("flagops").description("Manage Flagsmith flags like code: every change reviewed in a pull request.");
 function client() {
@@ -31455,12 +31671,15 @@ program2.command("pull").description("Export each environment's flags to <dir>/<
     fs2.listFeatures(project.id)
   ]);
   console.log(`Project ${project.name}: ${features.length} flags, ${environments.length} environments`);
+  const source = adminSource(fs2, project.id);
   const files = [];
   for (const env of environments) {
     const target = import_node_path4.default.join(opts.dir, fileNameFor(env.name));
     const other = files.find((f) => f.target === target);
     if (other) throw new Error(`Environments "${other.file.environment}" and "${env.name}" would both be written to ${target}. Rename one in Flagsmith.`);
-    files.push({ target, file: buildFlagFile(env.name, features, await fs2.listEnvironmentStates(env.api_key)) });
+    const live = await source.readLive(env);
+    const overrides = new Map([...live].map(([name, l]) => [name, l.overrides ?? []]));
+    files.push({ target, file: buildFlagFile(env.name, features, await fs2.listEnvironmentStates(env.api_key), overrides) });
   }
   const skipped = /* @__PURE__ */ new Map();
   for (const { file: file2 } of files) {
@@ -31534,11 +31753,14 @@ program2.command("apply").description("Make Flagsmith match the YAML files (neve
   const fs2 = client();
   const project = await resolveProject(fs2, opts.project);
   const plans = await buildPlans(adminSource(fs2, project.id), opts.dir, opts.env);
-  console.log(formatPlan(plans));
   const conflicts = archiveConflicts(plans);
-  if (conflicts.length > 0) throw new Error(`
-Nothing changed:
+  if (conflicts.length > 0) {
+    console.log(formatPlan(plans).replace(/\n\n[^\n]*$/, ""));
+    throw new Error(`
+Apply stopped; nothing changed:
 ${conflicts.join("\n")}`);
+  }
+  console.log(formatPlan(plans));
   if (countActions(plans) === 0) return;
   if (!opts.yes) {
     if (!process.stdin.isTTY) throw new Error("Not asking for confirmation without a terminal. Use --yes.");

@@ -153,7 +153,7 @@ jobs:
           expect_exit 0 $readonly_cli drift
           $cli apply --yes
 
-          echo "--- an archived flag changed in the dashboard: Flagsmith still serves it, so both modes report drift"
+          echo "--- an archived flag changed in the dashboard: Flagsmith still serves it, so both modes report drift and apply puts it back"
           legacy_state=$(curl -sf -H "$auth" "$FLAGSMITH_API_URL/environments/$env_key/featurestates/?feature=$legacy" \
             | jq -r '(.results? // .) | .[] | select(.identity==null and .feature_segment==null) | .id')
           was=$(curl -sf -H "$auth" "$FLAGSMITH_API_URL/environments/$env_key/featurestates/$legacy_state/" | jq -r .enabled)
@@ -162,10 +162,9 @@ jobs:
             -d "{\"enabled\": $flip}" "$FLAGSMITH_API_URL/environments/$env_key/featurestates/$legacy_state/" > /dev/null
           expect_exit 2 $cli drift
           expect_exit 2 $readonly_cli drift
-          echo "--- apply leaves archived flags alone"
-          $cli apply --yes | tee apply.txt
-          grep -q "Nothing to apply" apply.txt
-          expect_exit 2 $cli drift
+          $cli apply --yes
+          expect_exit 0 $cli drift
+          expect_exit 0 $readonly_cli drift
 
           echo "--- unarchived in the dashboard: admin drift reports it, apply refuses and changes nothing"
           curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json" \
@@ -173,10 +172,56 @@ jobs:
           $cli drift | tee drift.txt || true
           grep -q "unarchived outside Git" drift.txt
           expect_exit 1 $cli apply --yes
-          echo "--- archived again: apply runs, and the archived flag's dashboard edit is still drift"
-          curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json"             -d '{"is_archived": true}' "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/features/$legacy/" > /dev/null
+          curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json" \
+            -d '{"is_archived": true}' "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/features/$legacy/" > /dev/null
+          expect_exit 0 $cli drift
+
+          echo "--- segment overrides from YAML: add, then reorder, then remove"
+          for s in beta_testers staff; do
+            curl -sf -X POST -H "$auth" -H "Content-Type: application/json" "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/segments/" \
+              -d "{\"name\":\"$s\",\"project\":$FLAGSMITH_PROJECT,\"rules\":[{\"type\":\"ALL\",\"rules\":[{\"type\":\"ANY\",\"rules\":[],\"conditions\":[{\"operator\":\"EQUAL\",\"property\":\"plan\",\"value\":\"$s\"}]}],\"conditions\":[]}]}" > /dev/null
+          done
+          segments() { # segments <json list>: set dark_mode's overrides in production.yaml
+            node -e 'const fs=require("fs"),Y=require(process.env.GITHUB_WORKSPACE+"/node_modules/yaml");const f="flags/production.yaml",y=Y.parse(fs.readFileSync(f,"utf8"));y.flags.dark_mode.segments=JSON.parse(process.argv[1]);fs.writeFileSync(f,Y.stringify(y))' "$1"
+          }
+          segments '[{"segment":"staff","enabled":false,"value":9},{"segment":"beta_testers","enabled":true,"value":"b"}]'
+          $cli validate
+          $cli plan --no-code | tee plan.txt
+          grep -q "dark_mode \[segment staff\]: new override" plan.txt
           $cli apply --yes
-          expect_exit 2 $cli drift
+          expect_exit 0 $cli drift
+          expect_exit 0 $readonly_cli drift
+          segments '[{"segment":"beta_testers","enabled":true,"value":"b"},{"segment":"staff","enabled":true,"value":9}]'
+          $cli plan --no-code | tee plan.txt
+          grep -q "dark_mode: segment order staff, beta_testers -> beta_testers, staff" plan.txt
+          $cli apply --yes
+          expect_exit 0 $cli drift
+          expect_exit 0 $readonly_cli drift # read-only drift compares the order too
+          segments '[{"segment":"beta_testers","enabled":true,"value":"b"}]'
+          $cli apply --yes
+          expect_exit 0 $cli drift
+          expect_exit 0 $readonly_cli drift
+
+          echo "--- an override added in the dashboard: drift in both modes, and apply removes it"
+          dark=$(curl -sf -H "$auth" "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/features/?search=dark_mode" | jq -r '.results[] | select(.name=="dark_mode") | .id')
+          staff=$(curl -sf -H "$auth" "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/segments/" | jq -r '.results[] | select(.name=="staff") | .id')
+          curl -sf -X POST -H "$auth" -H "Content-Type: application/json" "$FLAGSMITH_API_URL/environments/$env_key/features/$dark/create-segment-override/" \
+            -d "{\"enabled\":true,\"feature_state_value\":{\"type\":\"unicode\",\"string_value\":\"x\"},\"feature_segment\":{\"segment\":$staff}}" > /dev/null
+          $cli drift | tee drift.txt || true
+          grep -q "override added outside Git" drift.txt
+          expect_exit 2 $readonly_cli drift
+          $cli apply --yes
+          expect_exit 0 $cli drift
+          expect_exit 0 $readonly_cli drift
+
+          echo "--- pull writes the overrides back"
+          $cli pull
+          grep -A8 "  dark_mode:" flags/production.yaml | grep -q "segment: beta_testers"
+          expect_exit 0 $cli drift
+
+          echo "--- a dashboard change for the Action steps below to find and fix"
+          curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json" \
+            -d '{"enabled": false}' "$FLAGSMITH_API_URL/environments/$env_key/featurestates/$state/" > /dev/null
 
           # For the Action steps below.
           echo "CI_FLAGS_DIR=$RUNNER_TEMP/e2e/flags" >> "$GITHUB_ENV"
@@ -211,7 +256,7 @@ jobs:
           dir: ${{ env.CI_FLAGS_DIR }}
           issue: "false"
 
-      - name: "Action: apply (nothing to change: apply leaves archived flags alone)"
+      - name: "Action: apply puts the dashboard change back"
         id: apply
         uses: ./
         with:
@@ -228,11 +273,12 @@ jobs:
           APPLY: ${{ steps.apply.outcome }}
         run: |
           echo "plan changes=$CHANGES, drift=$DRIFT, apply=$APPLY"
-          [ "$CHANGES" = 0 ] || { echo "::error::expected 0 planned changes"; exit 1; }
+          [ "$CHANGES" = 1 ] || { echo "::error::expected 1 planned change"; exit 1; }
           [ "$DRIFT" = true ] || { echo "::error::expected drift"; exit 1; }
           [ "$APPLY" = success ] || { echo "::error::apply failed"; exit 1; }
-          grep -q "archived flag changed outside Git" "$RUNNER_TEMP/flagops-drift.md"
+          grep -q "changed outside Git" "$RUNNER_TEMP/flagops-drift.md"
           grep -q "read-only keys" "$RUNNER_TEMP/flagops-plan.md"
+          node dist/cli.cjs drift --dir "$CI_FLAGS_DIR"
 
       - name: Flagsmith logs on failure
         if: failure()

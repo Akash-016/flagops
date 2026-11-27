@@ -20,10 +20,11 @@ Your flags live in YAML files in a Git repo, one file per environment. FlagOps k
 |---|---|
 | **Plan on every pull request** | A bot comments with a table of what will change, in which environment, and where in your code each changed flag is used. |
 | **Apply on merge** | Development and Staging update first. Production waits until a named reviewer approves. |
-| **Catch drift** | A scheduled check opens an issue when a flag's on/off or value in Flagsmith no longer matches Git (someone used the dashboard), and closes it once fixed. |
+| **Segment overrides** | Per-segment on/off and value, in priority order, reviewed like any other change: "beta users get the new search in Production" is a pull request. |
+| **Catch drift** | A scheduled check opens an issue when a flag's on/off, value or segment overrides in Flagsmith no longer match Git (someone used the dashboard), and closes it once fixed. |
 | **Find stale flags** | Lists flags with the same setting in every environment for 30+ days, with the code to clean up. |
 | **Validate offline** | Checks the files without an API key, so it runs safely on every pull request, forks included. |
-| **Never deletes** | Flags missing from YAML are reported, not removed. |
+| **Never deletes flags** | Flags missing from YAML are reported, not removed. |
 
 It ships as a CLI, a GitHub Action, and a one-command Docker setup.
 
@@ -101,9 +102,16 @@ FlagOps talks to the **Flagsmith Admin API** of a self-hosted instance, authenti
 | `GET /environments/<key>/featurestates/` | pull, plan, drift, stale | Each flag's on/off, value and last change, per environment |
 | `PATCH /environments/<key>/featurestates/<id>/` | apply | Change a flag's on/off and value |
 | `POST /projects/<id>/features/` | apply | Create a flag that's new in YAML |
+| `GET /projects/<id>/segments/` | plan, apply | Find segments by name |
+| `GET /features/featurestates/?environment=<id>` | pull, plan, drift | Segment override settings |
+| `GET /features/feature-segments/?environment=<id>&feature=<id>` | pull, plan, drift, apply | Which segment each override is for, and its priority |
+| `POST /environments/<key>/features/<id>/create-segment-override/` | apply | Add a segment override |
+| `PATCH /features/featurestates/<id>/` | apply | Change a segment override |
+| `DELETE /features/feature-segments/<id>/` | apply | Remove a segment override |
+| `POST /features/feature-segments/update-priorities/` | apply | Put overrides in the order YAML lists them |
 | `GET /projects/<id>/tags/` | stale | Skip flags tagged `permanent` |
 
-Segment overrides and per-user (identity) overrides are left alone: FlagOps reads and writes only each environment's default flag state.
+With read-only keys, segment overrides and their priorities come from the environment document too. Segment rules and per-user (identity) overrides are left alone.
 
 ## Commands
 
@@ -149,7 +157,7 @@ production.yaml is not a valid flag file:
   flags.max_cart_items: Unrecognized key: "vaule"
 ```
 
-**Archived flags** are marked `archived: true` and keep their settings, because Flagsmith still serves archived flags to SDKs. `flagops pull` writes this for you. `apply` never changes an archived flag, but `drift` checks its settings like any other, so a dashboard edit to an archived flag still opens an issue:
+**Archived flags** are marked `archived: true` and keep their settings, because Flagsmith still serves archived flags to SDKs. `flagops pull` writes this for you. `apply` and `drift` treat its settings like any other flag's, so a change to an archived flag is reviewed in a pull request, and a dashboard edit to one opens a drift issue. Archiving and unarchiving stay in the dashboard; `apply` never does either, and can't create a flag that is marked archived:
 
 ```yaml
   old_banner:
@@ -160,7 +168,24 @@ production.yaml is not a valid flag file:
 
 If a flag is archived on one side only (archived or unarchived in the dashboard, or deleted and recreated), `drift` with the admin key reports it, and `apply` stops without changing anything until you update the YAML or the dashboard.
 
-If Flagsmith holds a flag whose name or value FlagOps can't write back unchanged (a name with a tab, say), `pull` leaves that flag out of every file, says why, and writes the rest.
+**Segment overrides** give a flag a different setting for users in a segment. List them under `segments`, highest priority first (the first segment a user matches wins). The segments themselves, with their rules, live in Flagsmith; YAML names them, and each name must match exactly one segment:
+
+```yaml
+  new_search:
+    enabled: false
+    value: null
+    segments:
+      - segment: beta_testers
+        enabled: true
+        value: null
+      - segment: staff
+        enabled: true
+        value: "v2"
+```
+
+With a `segments` list, Git is the record: `apply` adds, changes, removes and reorders that flag's overrides to match, and `drift` reports any dashboard change to them. `segments: []` means no overrides. A flag with no `segments` key keeps whatever overrides it has in Flagsmith, so files written before FlagOps managed overrides change nothing; `flagops pull` writes the list for every flag. Overrides can differ between environments.
+
+If Flagsmith holds a flag whose name or value FlagOps can't write back unchanged (a name with a tab, say), `pull` leaves that flag out of every file, says why, and writes the rest. `plan` and `drift` leave such flags out too, since no flag file can hold them; rename them in Flagsmith to manage them.
 
 **Every file must list the same flags.** A Flagsmith flag always exists in every environment, so a new flag goes into each file (with `enabled: false` where it should stay off). If it's missing from one, every command stops and says which file to fix.
 
@@ -185,6 +210,8 @@ If Flagsmith holds a flag whose name or value FlagOps can't write back unchanged
 
 `plan` and `drift` also accept `admin-key` if you don't set `environment-keys`, but then a pull request workflow holds the admin key.
 
+`@v1` moves to each compatible release. In jobs that hold the admin key, you can pin a commit instead (`Akash-016/flagops@<sha>`) and update it on purpose, like any other dependency.
+
 The Action is a prebuilt bundle (`dist/`), so it installs nothing and runs in seconds. CI runs `validate`, `plan`, `drift` and `apply` through the Action on Linux against Flagsmith in Docker; the demo runs it on a Windows self-hosted runner.
 
 ## Security model
@@ -204,13 +231,14 @@ FlagOps makes Git the record of every flag change, and makes production changes 
 **Other points:**
 
 - **Fork pull requests get no secrets.** The examples run only `validate` for forks and skip `plan`.
-- **Drift is a backstop for what FlagOps manages.** A change to a flag's default on/off or value outside a reviewed merge, from the dashboard or from a misused key, shows up in the next drift check as an issue, archived flags included. Drift does not see segment overrides, identity overrides, or environments with no flag file. With read-only keys it also can't see whether a flag is archived; run drift with the admin key from a scheduled job on `main` to catch that.
+- **Drift is a backstop for what FlagOps manages.** A change to a flag's default on/off or value outside a reviewed merge, from the dashboard or from a misused key, shows up in the next drift check as an issue, archived flags included. Drift sees segment overrides on flags with a `segments` list; it does not see identity overrides, segment rules, or environments with no flag file. With read-only keys it also can't see whether a flag is archived; run drift with the admin key from a scheduled job on `main` to catch that.
 - **Self-hosted runners belong on private repos.** On a public repo, a fork pull request can add a workflow that runs on the runner's machine. If you must (the [demo](https://github.com/Akash-016/flagops-demo) does, to reach a laptop), require approval for workflows from all outside contributors, and keep no other secrets on that machine: any job that reaches the runner can read them. If the runner's machine also hosts Flagsmith, as in the demo, a job on it can likely reach Flagsmith's database directly and skip every control above, so do this only for a demo.
 - **`stale` needs the admin key**, because only the Admin API reports when each flag last changed. Run it locally, not from pull requests.
 
 ## Limits
 
-- Only each environment's default flag state. Segment overrides, identity overrides and multivariate weights are not managed yet.
+- Segment rules, identity overrides and multivariate weights are not managed. FlagOps sets only on/off and value.
+- An override and its order are separate calls, so if `apply` stops halfway, a new override can briefly sit at the end of the list. Run `apply` again.
 - `apply` never deletes flags. Flags removed from YAML are reported as "left alone".
 - `apply` stops at the first failed change and lists what it did; there is no rollback. Run it again after fixing the cause.
 - Creating a flag creates it in every environment, even with `--env`.
@@ -229,7 +257,7 @@ Change requests and audit logs aren't in the open-source build; they come with F
 Flagsmith has an official Terraform provider, and it's a good choice if you already run Terraform. FlagOps aims at teams that don't: `flagops pull` writes YAML from the flags you already have, with no import step and no state file to store and lock. The plan appears as a pull request comment and shows where each flag is used in your code. Drift and stale-flag reports are built in.
 
 **What about segments and per-user overrides?**
-Out of scope for now. FlagOps manages each environment's default on/off and value, and leaves overrides alone. See [Limits](#limits).
+Segment overrides are managed (see [YAML format](#yaml-format)). Segment rules and per-user overrides are left to Flagsmith. See [Limits](#limits).
 
 **Can someone bypass the review?**
 Not from a pull request: pull request workflows only get read-only keys, and the admin key is only available to `apply` jobs on `main`. Someone who can merge workflow changes without review can, so require reviews for `.github/`. Someone with dashboard access can still change flags, and the drift check reports changes to the flags FlagOps manages. See the [security model](#security-model).

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   COMMENT_MARKER,
   DRIFT_MARKER,
+  changedFlags,
   countActions,
   countDrift,
   diffEnvironment,
@@ -9,6 +10,7 @@ import {
   formatDriftMarkdown,
   formatPlan,
   formatPlanMarkdown,
+  guardOutput,
   sortByEnvironment,
   type LiveFlags,
 } from "./diff.js";
@@ -53,26 +55,91 @@ describe("diffEnvironment", () => {
   });
 });
 
+describe("segment overrides", () => {
+  const ov = (segment: string, enabled: boolean, value: string | number | null, id: number) => ({ segment, enabled, value, stateId: id, featureSegmentId: id * 10 });
+  const liveWith = (overrides: ReturnType<typeof ov>[]): LiveFlags =>
+    new Map([["f", { enabled: true, value: null, stateId: 1, featureId: 5, overrides }]]);
+  const want = (segments?: { segment: string; enabled: boolean; value: string | number | null }[]) =>
+    wanted({ f: { enabled: true, value: null, ...(segments ? { segments } : {}) } });
+
+  it("leaves overrides alone when YAML has no segments key", () => {
+    expect(diffEnvironment(want(), liveWith([ov("beta", true, 1, 1)])).changes).toEqual([]);
+  });
+
+  it("adds, changes and removes overrides, and reports a new order", () => {
+    const plan = diffEnvironment(
+      want([
+        { segment: "staff", enabled: true, value: 2 },
+        { segment: "beta", enabled: false, value: 1 },
+        { segment: "new", enabled: true, value: null },
+      ]),
+      liveWith([ov("beta", true, 1, 1), ov("staff", true, 2, 2), ov("old", true, null, 3)]),
+    );
+    expect(plan.changes.map((c) => [c.kind, "segment" in c ? c.segment : "", "before" in c && c.before ? "had" : "-", "after" in c && c.after ? "wants" : "-"])).toEqual([
+      ["override", "beta", "had", "wants"],
+      ["override", "new", "-", "wants"],
+      ["override", "old", "had", "-"],
+      ["order", "", "had", "wants"],
+    ]);
+    expect(countActions([plan])).toBe(4);
+    expect(changedFlags([plan])).toEqual(["f"]);
+    const text = formatPlan([plan]);
+    expect(text).toContain("  ~ f [segment beta]: on, value 1 -> off, value 1");
+    expect(text).toContain("  + f [segment new]: new override (on, value null)");
+    expect(text).toContain("  - f [segment old]: override removed (was on, value null)");
+    expect(text).toContain("  ~ f: segment order beta, staff, old -> staff, beta, new");
+    const md = formatPlanMarkdown([plan]);
+    expect(md).toContain("| + | <code>f</code> for segment <code>new</code> | (new override) | **on, <code>null</code>** |");
+    expect(md).toContain("| - | <code>f</code> for segment <code>old</code> | on, <code>null</code> | **override removed** |");
+    const drift = formatDrift([plan]);
+    expect(drift).toContain("(override added outside Git)");
+    expect(drift).toContain("(override deleted outside Git)");
+    expect(drift).toContain("(segment order changed outside Git)");
+  });
+
+  it("doesn't report order when only new overrides change positions", () => {
+    const plan = diffEnvironment(want([{ segment: "new", enabled: true, value: null }, { segment: "beta", enabled: true, value: 1 }]), liveWith([ov("beta", true, 1, 1)]));
+    expect(plan.changes.map((c) => c.kind)).toEqual(["override"]);
+  });
+
+  it("applies an archived flag's overrides too, since Flagsmith still serves them", () => {
+    const plan = diffEnvironment(
+      wanted({ f: { archived: true, enabled: true, value: null, segments: [{ segment: "beta", enabled: false, value: null }] } }),
+      liveWith([ov("beta", true, null, 1)]),
+    );
+    expect(plan.changes).toMatchObject([{ kind: "override", segment: "beta" }]);
+    expect(countActions([plan])).toBe(1);
+  });
+});
+
 describe("formatPlanMarkdown", () => {
   it("starts with the marker and warns about production changes", () => {
     const plan = diffEnvironment(wanted({ a: { enabled: true, value: "x|y" } }), live({ a: [false, null] }));
     const md = formatPlanMarkdown([plan]);
     expect(md.startsWith(COMMENT_MARKER)).toBe(true);
-    expect(md).toContain("### Production (production)");
+    expect(md).toContain("### <code>Production</code> (production)");
     expect(md).toContain("A reviewer must approve");
     expect(md).toContain("| ~ | <code>a</code> | off, <code>null</code> | **on, <code>&#34;x&#124;y&#34;</code>** |");
   });
 
-  it("can't be broken by names or values set in the Flagsmith dashboard", () => {
-    const evil = "evil`|\n\nNo flag changes.\n\n<!-- @someone";
-    const plan = diffEnvironment(wanted({}), live({ [evil]: [true, evil] }));
+  it("can't be broken by names, values or environment names set in the Flagsmith dashboard", () => {
+    const evil = "evil`|<!-- @someone **x** #1 :rocket: 😀";
+    const plan = { ...diffEnvironment(wanted({}), live({ [evil]: [true, evil] })), environment: "#2 GH-3 :tada:" };
     const md = formatPlanMarkdown([plan]);
     const body = md.slice(COMMENT_MARKER.length);
-    for (const bad of ["`", "<!--", "@someone"]) expect(body).not.toContain(bad);
+    const shown = body.replace(/&#\d+;/g, ""); // what GitHub could still parse once entities are set aside
+    for (const bad of ["`", "<!--", "@someone", "**x", "#1", ":rocket:", "#2", ":tada:"]) expect(shown).not.toContain(bad);
+    expect(body).not.toContain("&#55357;");
+    expect(body).toContain("&#128512;"); // the emoji as one code point, not two halves
+    expect(body).toContain("### <code>&#35;2 GH-3 &#58;tada&#58;</code>");
     const rows = body.split("\n").filter((l) => l.includes("evil"));
-    expect(rows).toHaveLength(1); // the name's newlines didn't split the row
-    expect(rows[0].split("|")).toHaveLength(6); // nor did its pipe add a column
-    expect(formatDrift([plan])).toContain(JSON.stringify(evil)); // terminal output: quoted, newlines escaped
+    expect(rows).toHaveLength(1);
+    expect(rows[0].split("|")).toHaveLength(6); // the name's pipe didn't add a column
+  });
+
+  it("leaves names a flag file can't hold out of drift (pull skips them and says why)", () => {
+    const plan = diffEnvironment(wanted({}), live({ "tab\there": [true, null], " lead": [true, null] }));
+    expect(plan.changes).toEqual([]);
   });
 
   it("stops Markdown emphasis, links and email links from names and values", () => {
@@ -86,23 +153,31 @@ describe("formatPlanMarkdown", () => {
     expect(formatDrift([plan])).toContain('_beta_: Git says (not in Git), Flagsmith has on, "a@b.io www.x.io"');
   });
 
-  it("quotes names with control characters in terminal output, so they can't start a workflow command", () => {
-    const plan = diffEnvironment(wanted({}), live({ "x\n::warning::y": [true, null] }));
-    expect(formatPlan([plan])).toContain('  ! "x\\n::warning::y": in Flagsmith');
-    expect(formatPlan([plan]).split("\n").some((l) => l.startsWith("::"))).toBe(false);
+  it("can't start a workflow command in a log, from output or error messages", () => {
+    const plan = { ...diffEnvironment(wanted({}), live({ a: [true, null] })), environment: "QA\n::warning::y" };
+    expect(formatPlan([plan])).toContain('"QA\\n::warning::y":');
+    expect(guardOutput("Missing environment QA\n::warning::y and\r::error::z")).toBe("Missing environment QA\n: :warning::y and\\r::error::z");
+    expect(guardOutput("  ::notice::x")).toBe("  : :notice::x");
   });
 
-  it("shows archived flags as left alone, and a summary line and notes up top", () => {
+  it("applies an archived flag's settings, and puts a summary line and notes up top", () => {
     const dev = { ...diffEnvironment(wanted({ a: { enabled: true, value: null } }), live({ a: [false, null] })), environment: "Development" };
     const prod = diffEnvironment(
       wanted({ a: { enabled: true, value: null }, old: { archived: true, enabled: true, value: null } }),
       live({ a: [false, null], old: [false, null] }),
     );
     const md = formatPlanMarkdown([dev, prod], undefined, ["read-only note"]);
-    expect(md).toContain("**2 changes**");
-    expect(md).toContain("Development: 1 · Production: 1");
+    expect(md).toContain("**3 changes**");
+    expect(md).toContain("<code>Development</code>: 1 · <code>Production</code>: 2");
     expect(md).toContain("> read-only note");
-    expect(md).toContain("| ! | <code>old</code> | off, <code>null</code> | on, <code>null</code>: archived, left alone |");
+    expect(md).toContain("| ~ | <code>old</code> | off, <code>null</code> | **on, <code>null</code>** |");
+  });
+
+  it("reports an archived flag missing from Flagsmith, without trying to create it", () => {
+    const plan = diffEnvironment(wanted({ old: { archived: true, enabled: false, value: null } }), live({}));
+    expect(plan.changes).toMatchObject([{ kind: "archived", flag: "old" }]);
+    expect(countActions([plan])).toBe(0);
+    expect(countDrift([plan])).toBe(1);
   });
 
   it("says so when there is nothing to change", () => {
@@ -117,8 +192,8 @@ describe("formatPlanMarkdown", () => {
     const same = { environment: "Staging", changes: [] };
     const md = formatPlanMarkdown([same, changed]);
     expect(md).toContain("**1 change** will be applied");
-    expect(md).not.toContain("### Staging");
-    expect(md).toContain("No changes in: Staging.");
+    expect(md).not.toContain("### <code>Staging");
+    expect(md).toContain("No changes in: <code>Staging</code>.");
   });
 });
 
@@ -150,7 +225,7 @@ describe("drift", () => {
     expect(countDrift([plan])).toBe(3);
     const md = formatDriftMarkdown([plan]);
     expect(md.startsWith(DRIFT_MARKER)).toBe(true);
-    expect(md).toContain("**3 flags** in Flagsmith no longer match");
+    expect(md).toContain("differs from the flag files in Git in **3 places**");
     expect(md).toContain("| <code>cart</code> | on, <code>10</code> | **on, <code>99</code>** | changed outside Git |");
     expect(md).toContain("| <code>gone</code> | on, <code>null</code> | **missing** | deleted outside Git |");
     expect(md).toContain("| <code>extra</code> | (not in Git) | **off, <code>null</code>** | added outside Git |");

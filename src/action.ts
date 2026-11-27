@@ -4,6 +4,7 @@
 import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { guardOutput } from "./diff.js";
 
 const input = (name: string) => (process.env[`INPUT_${name}`] ?? "").trim();
 
@@ -59,13 +60,13 @@ const result = spawnSync(process.execPath, [cli, command, ...args, ...extra], {
   encoding: "utf8",
 });
 const stderr = (result.stderr ?? "").trim();
-if (stderr) process.stderr.write(stderr + "\n");
+if (stderr) process.stderr.write(guardOutput(stderr) + "\n");
 const status = result.status ?? 1;
 // drift exits with 2 when it finds drift: that's a result, not a failure of this step.
 if (status !== 0 && !(command === "drift" && status === 2)) {
   // Show the reason on the run's summary page, not only in the log. Skip Node's own warnings.
   const reason = stderr.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith("(node:") && !l.startsWith("(Use `node"));
-  fail(`flagops ${command} failed: ${(reason.join("\n") || `exit code ${status}`).replace(/%/g, "%25").replace(/\r?\n/g, "%0A")}`);
+  fail(`flagops ${command} failed: ${(reason.join("\n") || `exit code ${status}`).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A")}`);
 }
 
 const output = (lines: string) => {

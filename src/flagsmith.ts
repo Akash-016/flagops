@@ -39,18 +39,65 @@ export interface Tag {
 
 // What a server-side environment key (ser....) can read: one environment's flags.
 // Read-only: the Admin API rejects these keys, so plan and drift can run without the admin key.
+interface DocumentFeatureState {
+  django_id: number;
+  feature: { id: number; name: string };
+  enabled: boolean;
+  feature_state_value: FlagValue;
+  feature_segment: { priority: number | null } | null;
+}
+
 export interface EnvironmentDocument {
   id: number;
   name: string;
   api_key: string;
-  project: { id: number; name: string };
-  feature_states: {
-    django_id: number;
-    feature: { id: number; name: string };
-    enabled: boolean;
-    feature_state_value: FlagValue;
-    feature_segment: unknown;
-  }[];
+  // Segment overrides are under each segment, not in feature_states.
+  project: { id: number; name: string; segments?: { id: number; name: string; feature_states: DocumentFeatureState[] }[] };
+  feature_states: DocumentFeatureState[];
+}
+
+export interface Segment {
+  id: number;
+  name: string;
+}
+
+// A segment override's place in a flag's list: lower priority wins.
+export interface FeatureSegment {
+  id: number;
+  segment: number;
+  segment_name: string;
+  priority: number;
+}
+
+// The Admin API's /features/featurestates/ writes and returns values in this typed form.
+interface TypedValue {
+  type?: string | null;
+  string_value?: string | null;
+  integer_value?: number | null;
+  boolean_value?: boolean | null;
+}
+
+export function fromTyped(v: TypedValue | null): FlagValue {
+  if (!v) return null;
+  if (v.type === "int") return v.integer_value ?? null;
+  if (v.type === "bool") return v.boolean_value ?? null;
+  return v.string_value ?? null;
+}
+
+export function toTyped(v: FlagValue): TypedValue {
+  if (typeof v === "number") return { type: "int", integer_value: v };
+  if (typeof v === "boolean") return { type: "bool", boolean_value: v };
+  return { type: "unicode", string_value: v };
+}
+
+// A segment override as /features/featurestates/ returns it.
+export interface OverrideState {
+  id: number;
+  feature: number;
+  enabled: boolean;
+  feature_state_value: TypedValue | null;
+  identity: number | null;
+  feature_segment: number | null;
 }
 
 // A Flagsmith that never answers should fail the run, not hang it. FLAGSMITH_TIMEOUT
@@ -83,7 +130,11 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<Response>
 
 // The start of an error response, without HTML: a 500 page is mostly markup.
 async function errorBody(res: Response): Promise<string> {
-  const body = (await res.text()).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  const body = (await res.text())
+    .replace(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   return body.length > 300 ? `${body.slice(0, 300)}...` : body;
 }
 
@@ -134,7 +185,9 @@ export class FlagsmithClient {
       seen.add(url);
       const page: Page<T> = await this.request<Page<T>>(url);
       items.push(...page.results);
-      url = page.next;
+      // Only follow the path: the admin key must never go to another host, or over http
+      // when a proxy makes Django build http:// links.
+      url = page.next && new URL(new URL(page.next).pathname + new URL(page.next).search, this.apiUrl).href;
     }
     return items;
   }
@@ -173,6 +226,60 @@ export class FlagsmithClient {
   async findEnvironmentState(envApiKey: string, featureId: number): Promise<FeatureState | undefined> {
     const states = await this.getAll<FeatureState>(`/environments/${envApiKey}/featurestates/?feature=${featureId}`);
     return states.find((s) => s.feature === featureId && s.identity === null && s.feature_segment === null);
+  }
+
+  // --- Segment overrides. Checked against Flagsmith 2.295.
+
+  listSegments(projectId: number): Promise<Segment[]> {
+    return this.getAll<Segment>(`/projects/${projectId}/segments/`);
+  }
+
+  // Every segment override state in an environment (not identity overrides).
+  async listOverrideStates(environmentId: number): Promise<OverrideState[]> {
+    const states = await this.getAll<OverrideState>(`/features/featurestates/?environment=${environmentId}`);
+    return states.filter((s) => s.identity === null && s.feature_segment !== null);
+  }
+
+  // One flag's overrides in one environment, with segment names and priorities.
+  listFeatureSegments(environmentId: number, featureId: number): Promise<FeatureSegment[]> {
+    return this.getAll<FeatureSegment>(`/features/feature-segments/?environment=${environmentId}&feature=${featureId}`);
+  }
+
+  // New overrides go to the end of the flag's list.
+  createOverride(envApiKey: string, featureId: number, segmentId: number, enabled: boolean, value: FlagValue) {
+    return this.request(`${this.apiUrl}/environments/${envApiKey}/features/${featureId}/create-segment-override/`, {
+      method: "POST",
+      body: JSON.stringify({ enabled, feature_state_value: toTyped(value), feature_segment: { segment: segmentId } }),
+    });
+  }
+
+  // Flagsmith answers 500 unless feature, environment and feature_segment are sent too.
+  updateOverride(o: { stateId: number; featureId: number; environmentId: number; featureSegmentId: number }, enabled: boolean, value: FlagValue) {
+    return this.request(`${this.apiUrl}/features/featurestates/${o.stateId}/`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        feature: o.featureId,
+        environment: o.environmentId,
+        feature_segment: o.featureSegmentId,
+        enabled,
+        feature_state_value: toTyped(value),
+      }),
+    });
+  }
+
+  async deleteOverride(featureSegmentId: number): Promise<void> {
+    const res = await fetchWithRetry(`${this.apiUrl}/features/feature-segments/${featureSegmentId}/`, {
+      method: "DELETE",
+      headers: { Authorization: `Api-Key ${this.adminKey}` },
+    });
+    if (!res.ok) throw new Error(`Flagsmith DELETE feature-segments/${featureSegmentId}/ failed: ${res.status} ${await errorBody(res)}`);
+  }
+
+  setPriorities(order: { id: number; priority: number }[]) {
+    return this.request(`${this.apiUrl}/features/feature-segments/update-priorities/`, {
+      method: "POST",
+      body: JSON.stringify(order),
+    });
   }
 
   updateState(envApiKey: string, stateId: number, change: { enabled?: boolean; feature_state_value?: FlagValue }) {
