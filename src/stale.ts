@@ -3,6 +3,7 @@
 
 import type { Feature, FeatureState, FlagValue, Tag } from "./flagsmith.js";
 import type { Reference } from "./references.js";
+import { code, text } from "./diff.js";
 
 export const PERMANENT_TAG = "permanent";
 
@@ -87,9 +88,9 @@ export function formatStaleMarkdown(stale: StaleFlag[], days: number, refs?: Map
     `|---|---|---|---|${refs ? "---|" : ""}`,
   );
   for (const s of stale) {
-    const setting = `${s.enabled ? "on" : "off"}${s.value === null ? "" : `, \`${JSON.stringify(s.value)}\``}`;
+    const setting = `${s.enabled ? "on" : "off"}${s.value === null ? "" : `, ${code(JSON.stringify(s.value))}`}`;
     const todo = s.enabled ? "Remove flag, keep the code it turns on" : "Remove flag and the code behind it";
-    lines.push(`| \`${s.name}\` | ${setting} | ${s.daysUnchanged} days | ${todo} |${refs ? ` ${refsText(refs.get(s.name))} |` : ""}`);
+    lines.push(`| ${code(s.name)} | ${setting} | ${s.daysUnchanged} days | ${todo} |${refs ? ` ${text(refsText(refs.get(s.name)))} |` : ""}`);
   }
   lines.push("", `Tag a flag \`${PERMANENT_TAG}\` in Flagsmith to leave it out (for example a kill switch).`);
   return lines.join("\n") + "\n";

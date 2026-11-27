@@ -2,7 +2,7 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { parseFlagFile, type FlagFile } from "./flagfile.js";
+import { isArchived, parseFlagFile, type FlagFile } from "./flagfile.js";
 import { readEnvironmentDocument, type Environment, type EnvironmentDocument, type Feature, type FlagsmithClient } from "./flagsmith.js";
 import { diffEnvironment, sortByEnvironment, type EnvironmentPlan, type LiveFlags } from "./diff.js";
 import { checkSameFlags, type NamedFlagFile } from "./validate.js";
@@ -129,11 +129,21 @@ export async function buildPlans(source: LiveSource, dir: string, onlyEnvs?: str
 
   // Flagsmith rejects a new flag whose name matches an existing one in any case, archived or
   // not. Stop here, before apply changes anything, with a message that says what to do.
-  const yamlNames = Object.keys(files[0]?.flags ?? {});
-  const archived = new Map((await source.archived?.())?.map((n) => [n.toLowerCase(), n]) ?? []);
-  const problems = yamlNames
-    .filter((n) => archived.has(n.toLowerCase()))
-    .map((n) => `"${n}" is archived in Flagsmith (as "${archived.get(n.toLowerCase())}"). Unarchive it, or remove it from every flag file.`);
+  // Archived flags must be marked "archived: true" in YAML, so read-only runs (which can't see
+  // archived state) leave them alone too. Only the Admin API can check the marks.
+  const problems: string[] = [];
+  const archivedNames = await source.archived?.();
+  if (archivedNames) {
+    const archived = new Set(archivedNames.map((n) => n.toLowerCase()));
+    for (const [name, entry] of Object.entries(files[0]?.flags ?? {})) {
+      const inFlagsmith = archived.has(name.toLowerCase());
+      if (inFlagsmith && !isArchived(entry)) {
+        problems.push(`"${name}" is archived in Flagsmith. Replace its settings with "archived: true" in every flag file (flagops pull writes this), or unarchive it.`);
+      } else if (!inFlagsmith && isArchived(entry)) {
+        problems.push(`"${name}" is marked archived in YAML but isn't archived in Flagsmith. Archive it there, or replace "archived: true" with its settings.`);
+      }
+    }
+  }
   for (const p of plans) {
     const liveNames = new Map(
       p.changes.filter((c) => c.kind === "untracked").map((c) => [c.flag.toLowerCase(), c.flag]),

@@ -42,9 +42,21 @@ describe("buildPlans", () => {
     return dir;
   }
 
-  it("stops before apply when a flag in YAML is archived in Flagsmith", async () => {
+  it("stops before apply when a flag archived in Flagsmith isn't marked archived in YAML", async () => {
     const dir = await flagsDir(["dark_mode"]);
     await expect(buildPlans(source({}, ["dark_mode"]), dir)).rejects.toThrow(/"dark_mode" is archived in Flagsmith/);
+  });
+
+  it("leaves a flag marked archived alone, in admin and read-only mode alike", async () => {
+    const dir = await flagsDir([]);
+    await writeFile(path.join(dir, "production.yaml"), "environment: Production\nflags:\n  old:\n    archived: true\n");
+    // Admin API: the archived flag isn't in the live list.
+    expect((await buildPlans(source({}, ["old"]), dir))[0].changes).toEqual([]);
+    // Environment document: the archived flag shows up live, but isn't reported as untracked.
+    const readOnly = { ...source({ old: true }), archived: undefined };
+    expect((await buildPlans(readOnly, dir))[0].changes).toEqual([]);
+    // Marked archived but live in Flagsmith (admin can tell): stop.
+    await expect(buildPlans(source({ old: true }), dir)).rejects.toThrow(/isn't archived in Flagsmith/);
   });
 
   it("stops when a new flag differs from a live one only in case", async () => {

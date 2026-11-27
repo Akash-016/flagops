@@ -54,10 +54,19 @@ const runnerTemp = process.env.RUNNER_TEMP ?? ".";
 const reportFile = path.join(runnerTemp, `flagops-${command}.md`);
 
 const extra = command === "apply" ? ["--yes"] : ["--format", "markdown", "--out", reportFile];
-const result = spawnSync(process.execPath, [cli, command, ...args, ...extra], { stdio: "inherit" });
+const result = spawnSync(process.execPath, [cli, command, ...args, ...extra], {
+  stdio: ["inherit", "inherit", "pipe"],
+  encoding: "utf8",
+});
+const stderr = (result.stderr ?? "").trim();
+if (stderr) process.stderr.write(stderr + "\n");
 const status = result.status ?? 1;
 // drift exits with 2 when it finds drift: that's a result, not a failure of this step.
-if (status !== 0 && !(command === "drift" && status === 2)) process.exit(status);
+if (status !== 0 && !(command === "drift" && status === 2)) {
+  // Show the reason on the run's summary page, not only in the log. Skip Node's own warnings.
+  const reason = stderr.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith("(node:") && !l.startsWith("(Use `node"));
+  fail(`flagops ${command} failed: ${(reason.join("\n") || `exit code ${status}`).replace(/%/g, "%25").replace(/\r?\n/g, "%0A")}`);
+}
 
 const output = (lines: string) => {
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, lines);

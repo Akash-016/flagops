@@ -4,7 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { getApiUrl, getConfig, getEnvironmentKeys } from "./config.js";
 import { FlagsmithClient, type FeatureState, type Project } from "./flagsmith.js";
-import { buildFlagFile, fileNameFor, toYaml } from "./flagfile.js";
+import { buildFlagFile, fileNameFor, parseFlagFile, toYaml } from "./flagfile.js";
 import { createInterface } from "node:readline/promises";
 import {
   changedFlags,
@@ -76,7 +76,9 @@ program
       const states = await fs.listEnvironmentStates(env.api_key);
       const file = buildFlagFile(env.name, features, states);
       const target = path.join(opts.dir, fileNameFor(env.name));
-      await writeFile(target, toYaml(file), "utf8");
+      const yaml = toYaml(file);
+      parseFlagFile(yaml, target); // never write a file that validate would then reject
+      await writeFile(target, yaml, "utf8");
       console.log(`  wrote ${target} (${Object.keys(file.flags).length} flags)`);
     }
   });

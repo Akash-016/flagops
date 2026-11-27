@@ -104,7 +104,7 @@ describe("blast radius in the plan", () => {
     const md = formatPlanMarkdown([plan], refs);
     expect(md).toContain("### Where these flags are used");
     expect(md).toContain("- <code>banner</code>: not found in code");
-    expect(md).toContain("- <code>cart</code>: <code>src&#47;cart.ts&#58;4</code>");
+    expect(md).toContain("- <code>cart</code>: <code>src/cart.ts:4</code>");
     expect(md).not.toContain("<code>old</code>:");
     expect(formatPlan([plan], refs)).toContain("  cart: src/cart.ts:4");
   });

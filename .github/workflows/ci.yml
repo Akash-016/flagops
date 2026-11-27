@@ -138,6 +138,19 @@ jobs:
           expect_exit 1 env FLAGSMITH_ADMIN_KEY=$server_key FLAGSMITH_ENVIRONMENT_KEYS= $cli apply --yes
           $cli apply --yes
           expect_exit 0 $readonly_cli drift
+
+          echo "--- archive a flag in Flagsmith: apply stops until the YAML marks it, then every mode agrees"
+          legacy=$(curl -sf -H "$auth" "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/features/?search=legacy_payments" \
+            | jq -r '(.results? // .) | .[] | select(.name=="legacy_payments") | .id')
+          curl -sf -X PATCH -H "$auth" -H "Content-Type: application/json" \
+            -d '{"is_archived": true}' "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/features/$legacy/" > /dev/null
+          expect_exit 1 $cli apply --yes
+          $cli pull
+          grep -A1 legacy_payments: flags/production.yaml | grep -q "archived: true"
+          $cli validate
+          expect_exit 0 $cli drift
+          expect_exit 0 $readonly_cli drift
+          $cli apply --yes
           echo "All round-trip checks passed."
 
       - name: Flagsmith logs on failure

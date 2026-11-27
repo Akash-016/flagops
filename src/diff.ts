@@ -1,6 +1,6 @@
 // Compare what the YAML files want with what Flagsmith has now.
 
-import type { FlagFile } from "./flagfile.js";
+import { isArchived, type FlagFile } from "./flagfile.js";
 import type { FlagValue } from "./flagsmith.js";
 import { formatReferences, type Reference } from "./references.js";
 
@@ -26,6 +26,7 @@ export function diffEnvironment(wanted: FlagFile, live: LiveFlags): EnvironmentP
   const changes: Change[] = [];
 
   for (const [flag, after] of Object.entries(wanted.flags)) {
+    if (isArchived(after)) continue; // archived flags are left alone, and not reported as untracked below
     const current = live.get(flag);
     if (!current) {
       changes.push({ kind: "create", flag, after });
@@ -97,9 +98,10 @@ export const COMMENT_MARKER = "<!-- flagops-plan -->";
 
 // Flag names, values and environment names can come from the Flagsmith dashboard, so they must
 // not be able to add Markdown, HTML or @mentions to a comment. Every character other than
-// letters, digits, space and "_.-" becomes an HTML entity, which GitHub shows as plain text.
+// letters, digits, space and _ . - , : / = ? + % becomes an HTML entity, which GitHub
+// shows as plain text. (Those few are left alone so URLs don't triple in length.)
 export function text(s: string): string {
-  return s.replace(/[^A-Za-z0-9 _.-]/g, (c) => `&#${c.codePointAt(0)};`);
+  return s.replace(/[^A-Za-z0-9 _.,:/=?+%-]/g, (c) => `&#${c.codePointAt(0)};`);
 }
 export const code = (s: string) => `<code>${text(s)}</code>`;
 const plain = (s: string) => s.replace(/<\/?code>/g, "").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));

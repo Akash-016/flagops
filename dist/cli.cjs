@@ -10962,11 +10962,23 @@ function getEnvironmentKeys() {
 
 // src/flagsmith.ts
 var TIMEOUT_MS = 3e4;
+async function fetchWithRetry(url2, init) {
+  const method = init.method ?? "GET";
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetch(url2, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
+      if (method !== "GET" || res.status < 500 || attempt === 3) return res;
+    } catch (err) {
+      if (method !== "GET" || attempt === 3) {
+        const reason = err.name === "TimeoutError" ? `no answer in ${TIMEOUT_MS / 1e3} s` : err.message;
+        throw new Error(`Flagsmith ${method} ${url2} failed: ${reason}`);
+      }
+    }
+    await new Promise((r) => setTimeout(r, attempt * 2e3));
+  }
+}
 async function readEnvironmentDocument(apiUrl, serverKey) {
-  const res = await fetch(`${apiUrl}/environment-document/`, {
-    headers: { "X-Environment-Key": serverKey },
-    signal: AbortSignal.timeout(TIMEOUT_MS)
-  });
+  const res = await fetchWithRetry(`${apiUrl}/environment-document/`, { headers: { "X-Environment-Key": serverKey } });
   if (res.status === 401 || res.status === 403) {
     throw new Error(
       `Flagsmith rejected an environment key starting "${serverKey.slice(0, 8)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`
@@ -10983,8 +10995,7 @@ var FlagsmithClient = class {
   apiUrl;
   adminKey;
   async request(url2, init = {}) {
-    const res = await fetch(url2, {
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+    const res = await fetchWithRetry(url2, {
       ...init,
       headers: {
         Authorization: `Api-Key ${this.adminKey}`,
@@ -30765,31 +30776,42 @@ function date4(params) {
 var import_yaml = __toESM(require_dist2(), 1);
 var MAX_INT = 2147483647;
 var MAX_TEXT = 2e4;
-var flagValue = external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean(), external_exports.null()], {
-  error: (iss) => iss.input === void 0 ? "missing (write value: null if the flag has no value)" : "expected text, a number, true/false or null"
-}).superRefine((v, ctx) => {
+var EDGE_SPACE = /^[\s\x1c-\x1f\x85]|[\s\x1c-\x1f\x85]$/;
+var flagValue = external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean(), external_exports.null()], { error: "expected text, a number, true/false or null" }).superRefine((v, ctx) => {
   const problem = (message) => ctx.addIssue({ code: "custom", message });
   if (typeof v === "number") {
     if (!Number.isInteger(v)) problem('Flagsmith stores whole numbers only; quote decimals as text, for example "1.5"');
     else if (v > MAX_INT || v < -MAX_INT - 1) problem(`number too big for Flagsmith (limit ${MAX_INT}); quote it as text`);
   } else if (typeof v === "string") {
-    if (v.length > MAX_TEXT) problem(`text longer than ${MAX_TEXT} characters`);
-    else if (v !== v.trim()) problem("Flagsmith trims leading and trailing spaces; remove them");
+    if ([...v].length > MAX_TEXT) problem(`text longer than ${MAX_TEXT} characters`);
+    else if (EDGE_SPACE.test(v)) problem("Flagsmith trims leading and trailing spaces; remove them");
   }
 });
 var flagSchema = external_exports.strictObject({
-  enabled: external_exports.boolean(),
-  value: flagValue
-  // required: a typo such as "vaule" must not turn into null
-});
-var FLAG_NAME = /^[A-Za-z0-9_.-]+$/;
+  enabled: external_exports.boolean().optional(),
+  value: flagValue.optional(),
+  archived: external_exports.literal(true).optional()
+}).superRefine((f, ctx) => {
+  if (f.archived) {
+    if (f.enabled !== void 0 || f.value !== void 0) {
+      ctx.addIssue({ code: "custom", message: "an archived flag has no settings; remove enabled and value" });
+    }
+    return;
+  }
+  if (f.enabled === void 0) ctx.addIssue({ code: "custom", path: ["enabled"], message: "missing (true or false)" });
+  if (f.value === void 0) {
+    ctx.addIssue({ code: "custom", path: ["value"], message: "missing (write value: null if the flag has no value)" });
+  }
+}).transform((f) => f.archived ? { archived: true } : { enabled: f.enabled, value: f.value });
+var isArchived = (f) => "archived" in f;
+var BAD_NAME = /[\x00-\x1f\x7f]/;
 var flagFileSchema = external_exports.strictObject({
   environment: external_exports.string().min(1),
   flags: external_exports.record(external_exports.string(), flagSchema).default({}).superRefine((flags, ctx) => {
     const seen = /* @__PURE__ */ new Map();
     for (const name of Object.keys(flags)) {
-      if (!FLAG_NAME.test(name)) {
-        ctx.addIssue({ code: "custom", path: [name], message: "flag names may use only letters, digits, _ . and -" });
+      if (name === "" || BAD_NAME.test(name)) {
+        ctx.addIssue({ code: "custom", path: [name], message: "flag names can't be empty or contain control characters" });
       }
       const other = seen.get(name.toLowerCase());
       if (other) ctx.addIssue({ code: "custom", path: [name], message: `same as "${other}" except for case; Flagsmith treats them as one flag` });
@@ -30804,7 +30826,10 @@ function buildFlagFile(environmentName, features, states) {
   const stateByFeature = new Map(states.map((s) => [s.feature, s]));
   const flags = {};
   for (const f of [...features].sort((a, b) => a.name.localeCompare(b.name))) {
-    if (f.is_archived) continue;
+    if (f.is_archived) {
+      flags[f.name] = { archived: true };
+      continue;
+    }
     const state = stateByFeature.get(f.id);
     if (!state) continue;
     flags[f.name] = { enabled: state.enabled, value: state.feature_state_value ?? null };
@@ -30925,6 +30950,7 @@ function formatReferences(refs, max = 5) {
 function diffEnvironment(wanted, live) {
   const changes = [];
   for (const [flag, after] of Object.entries(wanted.flags)) {
+    if (isArchived(after)) continue;
     const current = live.get(flag);
     if (!current) {
       changes.push({ kind: "create", flag, after });
@@ -30982,7 +31008,7 @@ function describe3(change) {
 }
 var COMMENT_MARKER = "<!-- flagops-plan -->";
 function text(s) {
-  return s.replace(/[^A-Za-z0-9 _.-]/g, (c) => `&#${c.codePointAt(0)};`);
+  return s.replace(/[^A-Za-z0-9 _.,:/=?+%-]/g, (c) => `&#${c.codePointAt(0)};`);
 }
 var code = (s) => `<code>${text(s)}</code>`;
 var plain = (s) => s.replace(/<\/?code>/g, "").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
@@ -31172,9 +31198,9 @@ function formatStaleMarkdown(stale, days, refs) {
     `|---|---|---|---|${refs ? "---|" : ""}`
   );
   for (const s of stale) {
-    const setting = `${s.enabled ? "on" : "off"}${s.value === null ? "" : `, \`${JSON.stringify(s.value)}\``}`;
+    const setting = `${s.enabled ? "on" : "off"}${s.value === null ? "" : `, ${code(JSON.stringify(s.value))}`}`;
     const todo = s.enabled ? "Remove flag, keep the code it turns on" : "Remove flag and the code behind it";
-    lines.push(`| \`${s.name}\` | ${setting} | ${s.daysUnchanged} days | ${todo} |${refs ? ` ${refsText(refs.get(s.name))} |` : ""}`);
+    lines.push(`| ${code(s.name)} | ${setting} | ${s.daysUnchanged} days | ${todo} |${refs ? ` ${text(refsText(refs.get(s.name)))} |` : ""}`);
   }
   lines.push("", `Tag a flag \`${PERMANENT_TAG}\` in Flagsmith to leave it out (for example a kill switch).`);
   return lines.join("\n") + "\n";
@@ -31191,7 +31217,13 @@ function checkSameFlags(files) {
   const problems = [];
   for (const flag of [...all].sort()) {
     const missing = files.filter((f) => !(flag in f.file.flags)).map((f) => f.source);
-    if (missing.length === 0) continue;
+    if (missing.length === 0) {
+      const archivedIn = files.filter((f) => isArchived(f.file.flags[flag])).map((f) => f.source);
+      if (archivedIn.length > 0 && archivedIn.length < files.length) {
+        problems.push(`"${flag}" is marked archived in ${archivedIn.join(", ")} but not in the other files. Archiving applies to every environment.`);
+      }
+      continue;
+    }
     const present = files.filter((f) => flag in f.file.flags).map((f) => f.source);
     problems.push(
       `"${flag}" is in ${present.join(", ")} but missing from ${missing.join(", ")}. Flagsmith creates a flag in every environment, so add it there too (enabled: false to keep it off).`
@@ -31293,9 +31325,19 @@ async function buildPlans(source, dir, onlyEnvs) {
     const live = await source.readLive(env);
     plans.push({ ...diffEnvironment(file2, live), env });
   }
-  const yamlNames = Object.keys(files[0]?.flags ?? {});
-  const archived = new Map((await source.archived?.())?.map((n) => [n.toLowerCase(), n]) ?? []);
-  const problems = yamlNames.filter((n) => archived.has(n.toLowerCase())).map((n) => `"${n}" is archived in Flagsmith (as "${archived.get(n.toLowerCase())}"). Unarchive it, or remove it from every flag file.`);
+  const problems = [];
+  const archivedNames = await source.archived?.();
+  if (archivedNames) {
+    const archived = new Set(archivedNames.map((n) => n.toLowerCase()));
+    for (const [name, entry] of Object.entries(files[0]?.flags ?? {})) {
+      const inFlagsmith = archived.has(name.toLowerCase());
+      if (inFlagsmith && !isArchived(entry)) {
+        problems.push(`"${name}" is archived in Flagsmith. Replace its settings with "archived: true" in every flag file (flagops pull writes this), or unarchive it.`);
+      } else if (!inFlagsmith && isArchived(entry)) {
+        problems.push(`"${name}" is marked archived in YAML but isn't archived in Flagsmith. Archive it there, or replace "archived: true" with its settings.`);
+      }
+    }
+  }
   for (const p of plans) {
     const liveNames = new Map(
       p.changes.filter((c) => c.kind === "untracked").map((c) => [c.flag.toLowerCase(), c.flag])
@@ -31383,7 +31425,9 @@ program2.command("pull").description("Export each environment's flags to <dir>/<
     const states = await fs2.listEnvironmentStates(env.api_key);
     const file2 = buildFlagFile(env.name, features, states);
     const target = import_node_path4.default.join(opts.dir, fileNameFor(env.name));
-    await (0, import_promises3.writeFile)(target, toYaml(file2), "utf8");
+    const yaml = toYaml(file2);
+    parseFlagFile(yaml, target);
+    await (0, import_promises3.writeFile)(target, yaml, "utf8");
     console.log(`  wrote ${target} (${Object.keys(file2.flags).length} flags)`);
   }
 });

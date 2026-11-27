@@ -31,9 +31,15 @@ describe("buildFlagFile", () => {
     expect(file.flags.zeta).toEqual({ enabled: false, value: 5 });
   });
 
-  it("skips archived flags and flags with no state", () => {
+  it("marks archived flags and skips flags with no state", () => {
     const file = buildFlagFile("Dev", [feature(1, "old", true), feature(2, "orphan")], [state(1, true)]);
-    expect(file.flags).toEqual({});
+    expect(file.flags).toEqual({ old: { archived: true } });
+  });
+
+  it("writes files that parse back, whatever names Flagsmith allows", () => {
+    const names = ["bad name", "<b>x</b>", "@here", "émoji", "a|b", "x`y", "old"];
+    const original = buildFlagFile("Dev", names.map((n, i) => feature(i + 1, n, n === "old")), names.map((_, i) => state(i + 1, true, "v")));
+    expect(parseFlagFile(toYaml(original), "dev.yaml")).toEqual(original);
   });
 });
 
@@ -60,8 +66,18 @@ describe("parseFlagFile", () => {
     expect(bad("-5")).not.toThrow();
   });
 
-  it("rejects flag names that could break the Markdown in pull request comments", () => {
-    expect(() => parseFlagFile("environment: Dev\nflags:\n  'evil`|x':\n    enabled: true\n    value: null\n", "dev.yaml")).toThrow(/flag names/);
+  it("rejects flag names with control characters", () => {
+    expect(() => parseFlagFile('environment: Dev\nflags:\n  "a\\nb":\n    enabled: true\n    value: null\n', "dev.yaml")).toThrow(/control characters/);
+  });
+
+  it("rejects values Flagsmith would trim with Python's rules", () => {
+    expect(() => parseFlagFile('environment: Dev\nflags:\n  a:\n    enabled: true\n    value: "sale\x1f"\n', "dev.yaml")).toThrow(/trims/);
+  });
+
+  it("accepts an archived flag, with no settings", () => {
+    const file = parseFlagFile("environment: Dev\nflags:\n  old:\n    archived: true\n", "dev.yaml");
+    expect(file.flags.old).toEqual({ archived: true });
+    expect(() => parseFlagFile("environment: Dev\nflags:\n  old:\n    archived: true\n    enabled: true\n", "dev.yaml")).toThrow(/no settings/);
   });
 
   it("explains what is wrong with a bad file", () => {

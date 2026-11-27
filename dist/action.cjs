@@ -63,9 +63,17 @@ for (const env of input("ENVIRONMENTS").split(",").map((e) => e.trim()).filter(B
 var runnerTemp = process.env.RUNNER_TEMP ?? ".";
 var reportFile = import_node_path.default.join(runnerTemp, `flagops-${command}.md`);
 var extra = command === "apply" ? ["--yes"] : ["--format", "markdown", "--out", reportFile];
-var result = (0, import_node_child_process.spawnSync)(process.execPath, [cli, command, ...args, ...extra], { stdio: "inherit" });
+var result = (0, import_node_child_process.spawnSync)(process.execPath, [cli, command, ...args, ...extra], {
+  stdio: ["inherit", "inherit", "pipe"],
+  encoding: "utf8"
+});
+var stderr = (result.stderr ?? "").trim();
+if (stderr) process.stderr.write(stderr + "\n");
 var status = result.status ?? 1;
-if (status !== 0 && !(command === "drift" && status === 2)) process.exit(status);
+if (status !== 0 && !(command === "drift" && status === 2)) {
+  const reason = stderr.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith("(node:") && !l.startsWith("(Use `node"));
+  fail(`flagops ${command} failed: ${(reason.join("\n") || `exit code ${status}`).replace(/%/g, "%25").replace(/\r?\n/g, "%0A")}`);
+}
 var output = (lines) => {
   if (process.env.GITHUB_OUTPUT) (0, import_node_fs.appendFileSync)(process.env.GITHUB_OUTPUT, lines);
 };

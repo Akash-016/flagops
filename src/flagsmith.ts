@@ -56,11 +56,26 @@ export interface EnvironmentDocument {
 // A Flagsmith that never answers should fail the run, not hang it.
 const TIMEOUT_MS = 30_000;
 
+// GETs are safe to repeat, so a slow or briefly failing Flagsmith gets two more tries.
+// Writes are never retried: a PATCH that timed out may still have happened.
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  const method = init.method ?? "GET";
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
+      if (method !== "GET" || res.status < 500 || attempt === 3) return res;
+    } catch (err) {
+      if (method !== "GET" || attempt === 3) {
+        const reason = (err as Error).name === "TimeoutError" ? `no answer in ${TIMEOUT_MS / 1000} s` : (err as Error).message;
+        throw new Error(`Flagsmith ${method} ${url} failed: ${reason}`);
+      }
+    }
+    await new Promise((r) => setTimeout(r, attempt * 2000));
+  }
+}
+
 export async function readEnvironmentDocument(apiUrl: string, serverKey: string): Promise<EnvironmentDocument> {
-  const res = await fetch(`${apiUrl}/environment-document/`, {
-    headers: { "X-Environment-Key": serverKey },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
+  const res = await fetchWithRetry(`${apiUrl}/environment-document/`, { headers: { "X-Environment-Key": serverKey } });
   if (res.status === 401 || res.status === 403) {
     throw new Error(
       `Flagsmith rejected an environment key starting "${serverKey.slice(0, 8)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`,
@@ -82,8 +97,7 @@ export class FlagsmithClient {
   ) {}
 
   private async request<T>(url: string, init: RequestInit = {}): Promise<T> {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+    const res = await fetchWithRetry(url, {
       ...init,
       headers: {
         Authorization: `Api-Key ${this.adminKey}`,

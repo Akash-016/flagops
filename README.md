@@ -82,11 +82,11 @@ npx github:Akash-016/flagops apply    # make the change (asks first)
 1. Copy the four files from [`examples/workflows/`](examples/workflows) to `.github/workflows/`.
 2. In Flagsmith, create a server-side key for each environment (Environment settings → SDK Keys → Server-side). These can read flags but not change them.
 3. Settings → Secrets and variables → Actions: add the variable `FLAGSMITH_API_URL` and the secret `FLAGSMITH_ENVIRONMENT_KEYS` (the server-side keys, separated by spaces). `plan` and `drift` use these.
-4. Settings → Environments: create `non-production` and `production`. For both, set Deployment branches to `main` only and add the environment secret `FLAGSMITH_ADMIN_KEY`. For `production`, also add Required reviewers and turn on Prevent self-review. Only `apply` uses the admin key. On GitHub Free, Pro and Team, required reviewers work only in public repositories; private repositories need GitHub Enterprise.
+4. Settings → Environments: create `non-production` and `production`. For both, set Deployment branches to `main` only and add the environment secret `FLAGSMITH_ADMIN_KEY`. For `production`, also add Required reviewers and turn on Prevent self-review. Only `apply` uses the admin key. **Check your GitHub plan:** in private repositories, environments (with their secrets and branch limits) need GitHub Pro, Team or Enterprise, and required reviewers need Enterprise. On GitHub Free, use a public repository.
 5. Protect `main` with a ruleset: require a pull request with at least one approval, require review from code owners, and make `validate` a required status check. Add a `CODEOWNERS` line such as `/.github/ @your-team`, so workflow changes (and `CODEOWNERS` itself) need review.
 6. Read the [security model](#security-model).
 
-The examples use GitHub's `ubuntu-latest` runners, which need Flagsmith on an address they can reach. If Flagsmith runs on a private network, use a [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners) in a private repo. The [demo repo](https://github.com/Akash-016/flagops-demo) does this, with Flagsmith on the maintainer's machine.
+The examples use GitHub's `ubuntu-latest` runners, which need Flagsmith on an address they can reach. If Flagsmith runs on a private network, use a [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners), preferably in a private repo on a plan that has environments and required reviewers (see step 4). On a public repo, follow the runner advice in the [security model](#security-model). The [demo repo](https://github.com/Akash-016/flagops-demo) is public and runs Flagsmith on the maintainer's machine.
 
 ## How FlagOps uses Flagsmith
 
@@ -142,11 +142,18 @@ flags:
     value: 25
 ```
 
-Every flag needs both `enabled` and `value`. `value` can be text, a whole number, `true`/`false`, or `null`. Flag names may use letters, digits, `_`, `.` and `-`. Anything else stops every command with the exact place, including values Flagsmith would store differently (decimals, numbers above 2147483647, text with leading or trailing spaces) and misspelt keys:
+Every flag needs both `enabled` and `value`. `value` can be text, a whole number, `true`/`false`, or `null`. Flag names can be anything Flagsmith accepts except control characters; FlagOps escapes them wherever they appear in Markdown. Anything else stops every command with the exact place, including values Flagsmith would store differently (decimals, numbers above 2147483647, text with leading or trailing spaces) and misspelt keys:
 
 ```
 production.yaml is not a valid flag file:
   flags.max_cart_items: Unrecognized key: "vaule"
+```
+
+**Archived flags** appear as `archived: true` with no settings, and FlagOps leaves them alone. `flagops pull` writes this for you. If someone archives a flag in Flagsmith, `apply` stops and asks you to mark it (read-only keys can't tell archived flags apart, so the mark keeps every command in agreement):
+
+```yaml
+  old_banner:
+    archived: true
 ```
 
 **Every file must list the same flags.** A Flagsmith flag always exists in every environment, so a new flag goes into each file (with `enabled: false` where it should stay off). If it's missing from one, every command stops and says which file to fix.
@@ -201,7 +208,8 @@ FlagOps makes Git the record of every flag change, and makes production changes 
 - `apply` never deletes flags. Flags removed from YAML are reported as "left alone".
 - `apply` stops at the first failed change and lists what it did; there is no rollback. Run it again after fixing the cause.
 - Creating a flag creates it in every environment, even with `--env`.
-- Environment documents don't say whether a flag is archived. With read-only keys, `plan` and `drift` treat archived flags like any other; `apply` (admin key) stops with a clear message if YAML lists an archived flag.
+- Environment documents don't say whether a flag is archived, so with read-only keys, `plan` and `drift` rely on the `archived: true` marks. If someone archives a flag in Flagsmith and nobody marks it, only commands with the admin key notice (`apply` stops with a message saying what to do).
+- Flagsmith calls time out after 30 seconds. Reads are retried twice; writes are not.
 - A new flag must be listed in every environment file, because Flagsmith creates each flag in every environment.
 - Free Flagsmith organisations get one project; FlagOps works with one project per flags folder.
 - `stale` uses Flagsmith's last-update time for each environment's flag state.

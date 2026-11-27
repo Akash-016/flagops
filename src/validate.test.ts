@@ -24,4 +24,11 @@ describe("checkSameFlags", () => {
   it("has nothing to compare with a single file", () => {
     expect(checkSameFlags([named("production.yaml", ["a"])])).toEqual([]);
   });
+
+  it("requires every file to agree on archived flags", () => {
+    const a = named("development.yaml", ["old"]);
+    const b = named("production.yaml", ["old"]);
+    b.file.flags.old = { archived: true };
+    expect(checkSameFlags([a, b])[0]).toContain('"old" is marked archived in production.yaml but not in the other files');
+  });
 });

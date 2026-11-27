@@ -1,7 +1,7 @@
 // Checks that need no Flagsmith connection, so they can run anywhere (including on
 // pull requests from forks, which get no secrets).
 
-import type { FlagFile } from "./flagfile.js";
+import { isArchived, type FlagFile } from "./flagfile.js";
 
 export interface NamedFlagFile {
   source: string; // file name, for messages
@@ -17,7 +17,14 @@ export function checkSameFlags(files: NamedFlagFile[]): string[] {
   const problems: string[] = [];
   for (const flag of [...all].sort()) {
     const missing = files.filter((f) => !(flag in f.file.flags)).map((f) => f.source);
-    if (missing.length === 0) continue;
+    if (missing.length === 0) {
+      // Archiving is per project too, so every file must agree.
+      const archivedIn = files.filter((f) => isArchived(f.file.flags[flag])).map((f) => f.source);
+      if (archivedIn.length > 0 && archivedIn.length < files.length) {
+        problems.push(`"${flag}" is marked archived in ${archivedIn.join(", ")} but not in the other files. Archiving applies to every environment.`);
+      }
+      continue;
+    }
     const present = files.filter((f) => flag in f.file.flags).map((f) => f.source);
     problems.push(
       `"${flag}" is in ${present.join(", ")} but missing from ${missing.join(", ")}. ` +
