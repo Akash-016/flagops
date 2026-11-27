@@ -68,10 +68,11 @@ npx github:Akash-016/flagops apply    # make the change (asks first)
 
 **5. Add the GitHub Action** to the repo that holds your `flags/` folder
 
-1. Copy the three files from [`examples/workflows/`](examples/workflows) to `.github/workflows/`.
+1. Copy the four files from [`examples/workflows/`](examples/workflows) to `.github/workflows/`.
 2. Settings → Secrets and variables → Actions: add the secret `FLAGSMITH_ADMIN_KEY` and the variable `FLAGSMITH_API_URL`.
 3. Settings → Environments → New environment `production` → Required reviewers → add who may approve production flag changes.
-4. Read the [security model](#security-model) and protect `.github/workflows/`.
+4. Make `validate` a required status check on `main`, so broken flag files can't be merged.
+5. Read the [security model](#security-model) and protect `.github/workflows/`.
 
 The examples use GitHub's `ubuntu-latest` runners, which need Flagsmith on an address they can reach. If Flagsmith runs on a private network, use a [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners) in a private repo. The [demo repo](https://github.com/Akash-016/flagops-demo) does this, with Flagsmith on the maintainer's machine.
 

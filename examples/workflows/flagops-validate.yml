@@ -1,0 +1,24 @@
+# Copy to .github/workflows/ in the repo that holds your flag files.
+# Checks the flag files offline on every pull request. Needs no secrets, so it also
+# runs on fork pull requests.
+#
+# It runs on every pull request, not only ones that touch flags/, so you can make
+# "validate" a required status check without blocking pull requests that change
+# other files.
+
+name: FlagOps validate
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Akash-016/flagops@v1
+        with:
+          command: validate
