@@ -27,6 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # No admin key in this job, so the moving v1 tag (fixes arrive automatically) is a fair
+      # trade. Pin a commit SHA instead if your policy requires it, as flagops-apply.yml does.
       - uses: Akash-016/flagops@v1
         with:
           command: plan

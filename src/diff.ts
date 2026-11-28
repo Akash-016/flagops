@@ -164,6 +164,17 @@ function environmentRank(name: string): number {
   return 0;
 }
 
+// Production-like names ("Production", "prod-eu", "live") get the warning and the reviewer note.
+export const isProduction = (name: string) => environmentRank(name) === 2;
+
+// For reading: production first, then staging, then development, each group alphabetical.
+// A comment cut at GitHub's size limit then loses the least important rows.
+function productionFirst<T extends { environment: string }>(plans: T[]): T[] {
+  return [...plans].sort(
+    (a, b) => environmentRank(b.environment) - environmentRank(a.environment) || a.environment.localeCompare(b.environment),
+  );
+}
+
 export function sortByEnvironment<T extends { environment: string }>(plans: T[]): T[] {
   return [...plans].sort(
     (a, b) => environmentRank(a.environment) - environmentRank(b.environment) || a.environment.localeCompare(b.environment),
@@ -265,7 +276,6 @@ function referencesMarkdown(plans: EnvironmentPlan[], refs?: Map<string, Referen
   return lines;
 }
 
-const productionNames = ["production"];
 
 function planRow(c: Change): string {
   switch (c.kind) {
@@ -303,17 +313,17 @@ export function formatPlanMarkdown(plans: EnvironmentPlan[], refs?: Map<string, 
   const actions = countActions(plans);
   const lines: string[] = [COMMENT_MARKER, "## FlagOps plan", ""];
   lines.push(actions === 0 ? "No flag changes." : `**${changesLabel(actions)}** will be applied when this is merged.`);
-  // A long comment gets cut at the end, where production is, so count each environment up front.
+  // Counts for each environment up front, in the order changes flow.
   const changed = plans.filter((p) => p.changes.some(isAction));
   if (changed.length > 1) {
     lines.push("", changed.map((p) => `${code(p.environment)}: ${p.changes.filter(isAction).length}`).join(" · "));
   }
   for (const note of notes) lines.push("", `> ${note}`);
 
-  // Production first: GitHub limits comment size, and a cut drops the end.
-  for (const p of [...plans].reverse()) {
+  // Production first (see productionFirst).
+  for (const p of productionFirst(plans)) {
     if (p.changes.length === 0) continue;
-    const isProd = productionNames.includes(p.environment.toLowerCase());
+    const isProd = isProduction(p.environment);
     lines.push("", `### ${code(p.environment)}${isProd ? " (production)" : ""}`, "");
     if (isProd && p.changes.some(isAction)) {
       lines.push("> [!WARNING]", "> Changes production. A reviewer must approve before they apply.", "");
@@ -381,7 +391,7 @@ export function formatDriftMarkdown(plans: EnvironmentPlan[]): string {
   );
   const drifted = plans.filter((p) => p.changes.length > 0);
   if (drifted.length > 1) lines.push("", drifted.map((p) => `${code(p.environment)}: ${p.changes.length}`).join(" · "));
-  for (const p of [...drifted].reverse()) {
+  for (const p of productionFirst(drifted)) {
     lines.push("", `### ${code(p.environment)}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
     for (const c of p.changes) {
       const d = describeDrift(c);

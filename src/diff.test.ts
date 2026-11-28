@@ -196,6 +196,17 @@ describe("formatPlanMarkdown", () => {
     expect(drift.indexOf("### <code>Production</code>")).toBeLessThan(drift.indexOf("### <code>Development</code>"));
   });
 
+  it("treats any production-like name as production: warning, and listed first", () => {
+    const dev = { ...diffEnvironment(wanted({ a: { enabled: true, value: null } }), live({ a: [false, null] })), environment: "Dev-b" };
+    const dev2 = { ...dev, environment: "Dev-a" };
+    const prod = { ...dev, environment: "Prod" };
+    const md = formatPlanMarkdown([dev2, dev, prod]);
+    expect(md).toContain("### <code>Prod</code> (production)");
+    expect(md).toContain("A reviewer must approve");
+    expect(md.indexOf("<code>Prod</code> (production)")).toBeLessThan(md.indexOf("### <code>Dev-a</code>"));
+    expect(md.indexOf("### <code>Dev-a</code>")).toBeLessThan(md.indexOf("### <code>Dev-b</code>"));
+  });
+
   it("says so when there is nothing to change", () => {
     const plan = diffEnvironment(wanted({ a: { enabled: true, value: null } }), live({ a: [true, null] }));
     const md = formatPlanMarkdown([plan]);
