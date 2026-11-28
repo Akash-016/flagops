@@ -33,7 +33,7 @@ It ships as a CLI, a GitHub Action, and a one-command Docker setup.
 The [demo repo](https://github.com/Akash-016/flagops-demo) runs FlagOps against a real self-hosted Flagsmith:
 
 - [Pull request turning on a flag in production](https://github.com/Akash-016/flagops-demo/pull/3), with the plan comment.
-- [The apply run](https://github.com/Akash-016/flagops-demo/actions/runs/45822896350) for that merge. Development and Staging updated at once, and Production waited for approval.
+- [The apply run](https://github.com/Akash-016/flagops-demo/actions/runs/45822896350) for that merge. Development and Staging updated at once, and Production waited in its own job until the maintainer approved it (self-review was still allowed then; see the demo README).
 - [A drift issue](https://github.com/Akash-016/flagops-demo/issues/2) FlagOps opened after a dashboard edit, and closed by itself once Git and Flagsmith matched again.
 - Segment overrides: [a pull request giving beta testers the new search in Production](https://github.com/Akash-016/flagops-demo/pull/8), [its apply run](https://github.com/Akash-016/flagops-demo/actions/runs/46086054326), where Production waited in its own job (the demo has one maintainer, so the owner released it as admin; see the demo README), and [the drift issue](https://github.com/Akash-016/flagops-demo/issues/9) opened when the override was turned off outside Git, closed by itself after `flagops apply` put it back.
 - [CI](https://github.com/Akash-016/flagops/actions/workflows/ci.yml) runs a full round trip against Flagsmith in Docker on every push.

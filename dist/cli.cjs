@@ -31134,10 +31134,13 @@ function archiveConflicts(plans) {
   return [...seen.values()];
 }
 var changesLabel = (n) => `${n} change${n === 1 ? "" : "s"}`;
+var PROD_WORDS = ["prod", "production", "prd", "live"];
 function environmentRank(name) {
-  const n = name.toLowerCase();
-  if (n.includes("prod") || n === "live") return 2;
-  if (n.includes("stag") || n.includes("qa") || n.includes("test") || n.includes("uat")) return 1;
+  const words = name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const negated = (i) => i > 0 && ["non", "pre"].includes(words[i - 1]);
+  if (words.some((w, i) => PROD_WORDS.includes(w) && !negated(i))) return 2;
+  if (words.some((w, i) => PROD_WORDS.includes(w) && negated(i))) return 1;
+  if (/stag|qa|test|uat|preprod|nonprod/.test(words.join(" "))) return 1;
   return 0;
 }
 var isProduction = (name) => environmentRank(name) === 2;
