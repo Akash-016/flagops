@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "build": "tsc --noEmit && esbuild src/cli.ts src/action.ts --bundle --platform=node --target=node20 --format=cjs --outdir=dist --out-extension:.js=.cjs --log-level=warning",
+    "build": "tsc --noEmit && esbuild src/cli.ts src/action.ts src/github.ts --bundle --platform=node --target=node20 --format=cjs --outdir=dist --out-extension:.js=.cjs --log-level=warning",
     "test": "vitest run",
     "seed": "tsx scripts/seed.ts"
   },
