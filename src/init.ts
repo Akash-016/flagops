@@ -18,10 +18,10 @@ const yamlValue = (s: string) => (/^[A-Za-z0-9_.-]+$/.test(s) ? s : JSON.stringi
 export function customize(template: string, opts: InitOptions): string {
   let s = template.replace(/^# Copy to \.github\/workflows\/ in the repo that holds your flag files\.\n/, "# Written by flagops init.\n");
   if (opts.production !== "Production") {
-    s = s.replace(/^(\s+(?:skip-)?environments:) Production\b/gm, `$1 ${yamlValue(opts.production)}`);
+    s = s.replace(/^(\s+environments:) Production\b/gm, (_, key: string) => `${key} ${yamlValue(opts.production)}`);
   }
   if (opts.dir !== "flags") {
-    s = s.replace(/"flags\/\*\*"/g, JSON.stringify(`${opts.dir}/**`));
+    s = s.replace(/"flags\/\*\*"/g, () => JSON.stringify(`${opts.dir}/**`));
     // Every FlagOps step reads the folder from its "dir" input.
     s = s.replace(/^(\s+)command: (\w+)$/gm, (_, indent: string, command: string) => `${indent}command: ${command}\n${indent}dir: ${yamlValue(opts.dir)}`);
   }
@@ -33,6 +33,25 @@ const exists = (file: string) =>
     () => true,
     () => false,
   );
+
+// .github/CODEOWNERS, so workflow changes need a code owner's review (with the ruleset's
+// "require review from code owners"), and .env in .gitignore, so a local key file isn't committed.
+export async function writeRepoFiles(repoDir: string, owner: string | undefined): Promise<string[]> {
+  const done: string[] = [];
+  const codeowners = path.join(repoDir, ".github", "CODEOWNERS");
+  if (owner && !(await exists(codeowners))) {
+    await mkdir(path.dirname(codeowners), { recursive: true });
+    await writeFile(codeowners, `# Changes to workflows (and to this file) need review from:\n/.github/ @${owner}\n`, "utf8");
+    done.push(".github/CODEOWNERS");
+  }
+  const gitignore = path.join(repoDir, ".gitignore");
+  const current = (await exists(gitignore)) ? await readFile(gitignore, "utf8") : "";
+  if (!/^\.env$/m.test(current)) {
+    await writeFile(gitignore, current + (current && !current.endsWith("\n") ? "\n" : "") + ".env\n", "utf8");
+    done.push(".gitignore (.env)");
+  }
+  return done;
+}
 
 export async function writeWorkflows(repoDir: string, templatesDir: string, opts: InitOptions): Promise<{ written: string[]; kept: string[] }> {
   const out = path.join(repoDir, ".github", "workflows");
@@ -60,7 +79,8 @@ export function checklist(opts: InitOptions, repo?: string): string {
   const settings = repo ? `https://github.com/${repo}/settings` : "your repository's Settings";
   const prod = opts.production;
   return [
-    "Left to do in GitHub (about 20 minutes; the README's quick start has details):",
+    "Left to do in GitHub. The quickest way: flagops setup-github --create-keys --reviewer <teammate>",
+    "Or by hand (45-90 minutes; the README's quick start has details):",
     "",
     `1. Variable FLAGSMITH_API_URL, your Flagsmith API address (${repo ? `${settings}/variables/actions` : "Settings -> Secrets and variables -> Actions -> Variables"}):`,
     "     gh variable set FLAGSMITH_API_URL --body https://flagsmith.example.com/api/v1",
@@ -73,6 +93,7 @@ export function checklist(opts: InitOptions, repo?: string): string {
     `4. A ruleset on main (${repo ? `${settings}/rules` : "Settings -> Rules"}): require a pull request, the "validate" check, and code owner review for /.github/.`,
     `5. Export your flags and commit them: flagops pull --dir ${opts.dir}`,
     "",
-    `The apply workflow treats "${prod}" as production and applies every other environment first.`,
+    `The apply workflow treats "${prod}" as production. Edit the environments list of its non-production job to match yours.`,
+    "GitHub plans: in private repositories, environments need GitHub Pro, Team or Enterprise, and required reviewers need Enterprise. On GitHub Free, use a public repository.",
   ].join("\n");
 }

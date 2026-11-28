@@ -31144,6 +31144,9 @@ function segmentProblems(plans) {
   }
   return [...seen];
 }
+function missingEnvironments(plans) {
+  return plans.filter((p) => p.changes.some((c) => c.kind === "environment")).map((p) => p.environment);
+}
 function archiveConflicts(plans) {
   const seen = /* @__PURE__ */ new Map();
   for (const p of plans) {
@@ -31217,6 +31220,8 @@ function describe3(change) {
       if (!change.after) return `  - ${where}: override removed (was ${setting(change.before)})`;
       return `  ~ ${where}: ${setting(change.before)} -> ${setting(change.after)}`;
     }
+    case "environment":
+      return `  ! no such environment in Flagsmith (renamed or deleted?); it has: ${change.known.map(safe).join(", ")}`;
     case "segment":
       return `  ! ${flag} [segment ${safe(change.segment)}]: ${change.found === 0 ? "no such segment in Flagsmith" : `${change.found} segments have this name`} (apply leaves this flag's overrides alone)`;
     case "order":
@@ -31272,6 +31277,8 @@ function planRow(c) {
     case "order": {
       return `| ~ | ${code(c.flag)} segment order | ${c.before.map(code).join(", ")} | **${c.after.map(code).join(", ")}** |`;
     }
+    case "environment":
+      return `| ! | (environment) | no such environment in Flagsmith | apply stops until the file or Flagsmith is fixed |`;
     case "segment":
       return `| ! | ${code(c.flag)} for segment ${code(c.segment)} | ${c.found === 0 ? "no such segment in Flagsmith" : `${c.found} segments with this name`} | apply leaves this flag's overrides alone until fixed |`;
   }
@@ -31327,6 +31334,8 @@ function describeDrift(c) {
     }
     case "order":
       return { git: `segments ${c.after.map(code).join(", ")}`, live: `segments ${c.before.map(code).join(", ")}`, what: "segment order changed outside Git" };
+    case "environment":
+      return { git: "this environment", live: `no such environment (Flagsmith has ${c.known.map(code).join(", ")})`, what: "environment renamed or deleted outside Git" };
     case "segment":
       return c.found === 0 ? { git: `override for segment ${code(c.segment)}`, live: "no such segment", what: "segment renamed or deleted outside Git" } : { git: `override for segment ${code(c.segment)}`, live: `${c.found} segments with this name`, what: "segment name no longer unique" };
   }
@@ -31341,7 +31350,7 @@ function formatDriftMarkdown(plans) {
   lines.push(
     "## Flag drift detected",
     "",
-    `Flagsmith differs from the flag files in Git in **${total} place${total === 1 ? "" : "s"}**. Someone probably changed them in the Flagsmith dashboard.`
+    `Flagsmith differs from the flag files in Git in **${total} place${total === 1 ? "" : "s"}**. Usually someone changed them in the Flagsmith dashboard. It can also be a production deployment that was rejected after its pull request was merged.`
   );
   const drifted = plans.filter((p) => p.changes.length > 0);
   if (drifted.length > 1) lines.push("", drifted.map((p) => `${code(p.environment)}: ${p.changes.length}`).join(" \xB7 "));
@@ -31633,9 +31642,15 @@ async function buildPlans(source, dir, onlyEnvs, skipEnvs) {
   for (const file2 of files) {
     const env = environments.find((e) => e.name.toLowerCase() === file2.environment.toLowerCase());
     if (!env) {
-      throw new Error(
-        `YAML names environment "${file2.environment}", but ${source.missing}: ${environments.map((e) => e.name).join(", ")}`
-      );
+      plans.push({
+        environment: file2.environment,
+        changes: [{ kind: "environment", flag: "", known: environments.map((e) => e.name) }],
+        env: { id: -1, name: file2.environment, api_key: "", project: 0 },
+        featureIds: /* @__PURE__ */ new Map(),
+        segmentOrder: /* @__PURE__ */ new Map(),
+        multivariate: /* @__PURE__ */ new Set()
+      });
+      continue;
     }
     const live = await source.readLive(env);
     plans.push({
@@ -31664,6 +31679,8 @@ async function buildPlans(source, dir, onlyEnvs, skipEnvs) {
 async function applyPlans(fs2, projectId, plans) {
   const conflicts = archiveConflicts(plans);
   if (conflicts.length > 0) throw new Error(conflicts.join("\n"));
+  const missing = missingEnvironments(plans);
+  if (missing.length > 0) throw new Error(`Flagsmith has no environment named ${missing.join(", ")}. Nothing changed. Rename the flag file's environment, or the environment in Flagsmith.`);
   const versioned = plans.filter((p) => p.env.use_v2_feature_versioning && p.changes.some(isAction)).map((p) => p.environment);
   if (versioned.length > 0) {
     throw new Error(`${versioned.join(", ")} uses feature versioning (v2), which FlagOps can't write to yet. Nothing changed. plan and drift still work.`);
@@ -31753,10 +31770,10 @@ var yamlValue = (s) => /^[A-Za-z0-9_.-]+$/.test(s) ? s : JSON.stringify(s);
 function customize(template, opts) {
   let s = template.replace(/^# Copy to \.github\/workflows\/ in the repo that holds your flag files\.\n/, "# Written by flagops init.\n");
   if (opts.production !== "Production") {
-    s = s.replace(/^(\s+(?:skip-)?environments:) Production\b/gm, `$1 ${yamlValue(opts.production)}`);
+    s = s.replace(/^(\s+environments:) Production\b/gm, (_, key) => `${key} ${yamlValue(opts.production)}`);
   }
   if (opts.dir !== "flags") {
-    s = s.replace(/"flags\/\*\*"/g, JSON.stringify(`${opts.dir}/**`));
+    s = s.replace(/"flags\/\*\*"/g, () => JSON.stringify(`${opts.dir}/**`));
     s = s.replace(/^(\s+)command: (\w+)$/gm, (_, indent, command) => `${indent}command: ${command}
 ${indent}dir: ${yamlValue(opts.dir)}`);
   }
@@ -31766,6 +31783,24 @@ var exists = (file2) => (0, import_promises3.access)(file2).then(
   () => true,
   () => false
 );
+async function writeRepoFiles(repoDir, owner) {
+  const done = [];
+  const codeowners = import_node_path4.default.join(repoDir, ".github", "CODEOWNERS");
+  if (owner && !await exists(codeowners)) {
+    await (0, import_promises3.mkdir)(import_node_path4.default.dirname(codeowners), { recursive: true });
+    await (0, import_promises3.writeFile)(codeowners, `# Changes to workflows (and to this file) need review from:
+/.github/ @${owner}
+`, "utf8");
+    done.push(".github/CODEOWNERS");
+  }
+  const gitignore = import_node_path4.default.join(repoDir, ".gitignore");
+  const current = await exists(gitignore) ? await (0, import_promises3.readFile)(gitignore, "utf8") : "";
+  if (!/^\.env$/m.test(current)) {
+    await (0, import_promises3.writeFile)(gitignore, current + (current && !current.endsWith("\n") ? "\n" : "") + ".env\n", "utf8");
+    done.push(".gitignore (.env)");
+  }
+  return done;
+}
 async function writeWorkflows(repoDir, templatesDir, opts) {
   const out = import_node_path4.default.join(repoDir, ".github", "workflows");
   await (0, import_promises3.mkdir)(out, { recursive: true });
@@ -31789,7 +31824,8 @@ function checklist(opts, repo) {
   const settings = repo ? `https://github.com/${repo}/settings` : "your repository's Settings";
   const prod = opts.production;
   return [
-    "Left to do in GitHub (about 20 minutes; the README's quick start has details):",
+    "Left to do in GitHub. The quickest way: flagops setup-github --create-keys --reviewer <teammate>",
+    "Or by hand (45-90 minutes; the README's quick start has details):",
     "",
     `1. Variable FLAGSMITH_API_URL, your Flagsmith API address (${repo ? `${settings}/variables/actions` : "Settings -> Secrets and variables -> Actions -> Variables"}):`,
     "     gh variable set FLAGSMITH_API_URL --body https://flagsmith.example.com/api/v1",
@@ -31802,9 +31838,13 @@ function checklist(opts, repo) {
     `4. A ruleset on main (${repo ? `${settings}/rules` : "Settings -> Rules"}): require a pull request, the "validate" check, and code owner review for /.github/.`,
     `5. Export your flags and commit them: flagops pull --dir ${opts.dir}`,
     "",
-    `The apply workflow treats "${prod}" as production and applies every other environment first.`
+    `The apply workflow treats "${prod}" as production. Edit the environments list of its non-production job to match yours.`,
+    "GitHub plans: in private repositories, environments need GitHub Pro, Team or Enterprise, and required reviewers need Enterprise. On GitHub Free, use a public repository."
   ].join("\n");
 }
+
+// src/cli.ts
+var import_node_url = require("node:url");
 
 // src/setup.ts
 var import_node_child_process2 = require("node:child_process");
@@ -31932,6 +31972,7 @@ function runSetup(steps, log) {
 
 // src/cli.ts
 var import_node_child_process3 = require("node:child_process");
+var import_meta = {};
 for (const method of ["log", "error"]) {
   const write = console[method];
   console[method] = (...args) => write(...args.map((a) => typeof a === "string" ? guardOutput(a) : a));
@@ -31958,11 +31999,14 @@ async function resolveProject(fs2, wanted) {
 }
 program2.command("init").description("Add the FlagOps GitHub workflows to this repo and list the setup steps left to do").option("-d, --dir <dir>", "folder for the flag files", "flags").option("--production <name>", "name of your production environment in Flagsmith", "Production").option("--force", "overwrite workflow files that already exist").action(async (opts) => {
   const options = { dir: opts.dir, production: opts.production, force: Boolean(opts.force) };
-  const { written, kept } = await writeWorkflows(".", import_node_path5.default.resolve(__dirname, "..", "examples", "workflows"), options);
+  const here = typeof __dirname === "string" ? __dirname : import_node_path5.default.dirname((0, import_node_url.fileURLToPath)(import_meta.url));
+  const { written, kept } = await writeWorkflows(".", import_node_path5.default.resolve(here, "..", "examples", "workflows"), options);
   for (const name of written) console.log(`  wrote .github/workflows/${name}`);
   for (const name of kept) console.log(`  kept  .github/workflows/${name} (already there; --force overwrites it)`);
   const remote = (0, import_node_child_process3.spawnSync)("git", ["config", "--get", "remote.origin.url"], { encoding: "utf8" }).stdout ?? "";
-  console.log("\n" + checklist(options, githubRepo(remote)));
+  const repo = githubRepo(remote);
+  for (const file2 of await writeRepoFiles(".", repo?.split("/")[0])) console.log(`  wrote ${file2}`);
+  console.log("\n" + checklist(options, repo));
 });
 program2.command("setup-github").description("Set up the GitHub side for this repo with the gh CLI: variable, secrets, environments, ruleset").option("--repo <owner/name>", "GitHub repository (default: this folder's origin remote)").option("-p, --project <id-or-name>", "Flagsmith project").option("--reviewer <login>", "GitHub user who may approve production (repeat for more)", collect).option("--approvals <n>", "approvals a pull request to main needs", "1").option("--create-keys", "create the read-only server-side keys in Flagsmith (otherwise FLAGSMITH_ENVIRONMENT_KEYS is used)").option("-y, --yes", "don't ask for confirmation").action(async (opts) => {
   const approvals = Number(opts.approvals);
@@ -32140,10 +32184,22 @@ program2.command("stale").description("List flags with the same setting in every
   console.log(output2);
   if (opts.out) await (0, import_promises4.writeFile)(opts.out, output2, "utf8");
 });
-program2.command("apply").description("Make Flagsmith match the YAML files (never deletes flags)").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("--skip-env <name>", "leave this environment out (repeat for more)", collect).option("-y, --yes", "don't ask for confirmation (for CI)").action(async (opts) => {
+program2.command("apply").description("Make Flagsmith match the YAML files (never deletes flags)").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("--skip-env <name>", "leave this environment out (repeat for more)", collect).option("-y, --yes", "don't ask for confirmation (for CI)").option("--no-production", "refuse to apply any environment that looks like production (for the job that has no approval step)").action(async (opts) => {
   const fs2 = client();
   const project = await resolveProject(fs2, opts.project);
   const plans = await buildPlans(adminSource(fs2, project.id), opts.dir, opts.env, opts.skipEnv);
+  if (!opts.production || (opts.skipEnv?.length ?? 0) > 0) {
+    const prod = plans.filter((p) => isProduction(p.environment)).map((p) => p.environment);
+    if (prod.length > 0) {
+      throw new Error(
+        `${prod.join(", ")} looks like production, and this apply doesn't apply production (--no-production or --skip-env). Nothing changed. List it in the production job instead.`
+      );
+    }
+  }
+  const missingEnvs = missingEnvironments(plans);
+  if (missingEnvs.length > 0) {
+    throw new Error(`Flagsmith has no environment named ${missingEnvs.join(", ")}. Nothing changed. Rename the flag file's environment, or the environment in Flagsmith.`);
+  }
   const conflicts = archiveConflicts(plans);
   if (conflicts.length > 0) {
     console.log(formatPlan(plans).replace(/\n\n[^\n]*$/, ""));

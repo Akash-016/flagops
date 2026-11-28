@@ -27225,15 +27225,24 @@ if (!process.env.FLAGSMITH_API_URL?.trim()) {
 if (command === "apply" && input2("LATEST_ONLY") !== "false") {
   const ref = process.env.GITHUB_REF ?? "";
   const sha = process.env.GITHUB_SHA ?? "";
+  const cwd = process.env.GITHUB_WORKSPACE ?? ".";
   if (ref.startsWith("refs/heads/") && sha) {
     const branch = ref.slice("refs/heads/".length);
-    const r = (0, import_node_child_process.spawnSync)("git", ["ls-remote", "origin", ref], { encoding: "utf8", cwd: process.env.GITHUB_WORKSPACE });
+    const git = (...a) => (0, import_node_child_process.spawnSync)("git", a, { encoding: "utf8", cwd });
+    const r = git("ls-remote", "origin", ref);
     const tip = (r.stdout ?? "").split(/\s/)[0];
     if (r.status !== 0 || !tip) {
-      fail(`Couldn't check that ${sha.slice(0, 7)} is still the latest commit on ${branch} (is the repository checked out?). Set latest-only: false to skip this check.`);
+      fail(`Couldn't check ${branch} for newer flag files (is the repository checked out?). Set latest-only: false to skip this check.`);
     }
     if (tip !== sha) {
-      fail(`This run is for ${sha.slice(0, 7)}, but ${branch} is now at ${tip.slice(0, 7)}. Re-running an old run would apply old flag files; start a new run instead.`);
+      const dir = import_node_path.default.relative(cwd, import_node_path.default.resolve(cwd, input2("DIR") || "flags")) || ".";
+      const fetched = git("fetch", "--no-tags", "--depth=1", "origin", tip);
+      const diff = fetched.status === 0 ? git("diff", "--quiet", sha, "FETCH_HEAD", "--", dir) : fetched;
+      if (diff.status === 1) {
+        fail(`This run is for ${sha.slice(0, 7)}, but the flag files on ${branch} have changed since (now ${tip.slice(0, 7)}). Re-running an old run would apply old flag files; the newer commit's run applies the current ones.`);
+      }
+      if (diff.status !== 0) fail(`Couldn't compare the flag files with ${branch} (${(diff.stderr ?? "").trim().split("\n")[0]}). Set latest-only: false to skip this check.`);
+      console.log(`${branch} has moved on to ${tip.slice(0, 7)}, but its flag files are the same as in ${sha.slice(0, 7)}, so this apply goes ahead.`);
     }
   }
 }
@@ -27245,6 +27254,7 @@ for (const env of input2("ENVIRONMENTS").split(",").map((e) => e.trim()).filter(
 for (const env of input2("SKIP_ENVIRONMENTS").split(",").map((e) => e.trim()).filter(Boolean)) {
   args.push("--skip-env", env);
 }
+if (command === "apply" && input2("ALLOW_PRODUCTION") === "false") args.push("--no-production");
 var runnerTemp = process.env.RUNNER_TEMP ?? ".";
 var reportFile = import_node_path.default.join(runnerTemp, `flagops-${command}.md`);
 var extra = command === "apply" ? ["--yes"] : ["--format", "markdown", "--out", reportFile];

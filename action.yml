@@ -33,8 +33,12 @@ inputs:
     description: "Seconds to wait for each Flagsmith call (default 30). Raise it for a slow or very large instance"
     required: false
     default: ""
+  allow-production:
+    description: "For apply: false makes it refuse, changing nothing, if any environment it would apply looks like production. Set it on the job that has no approval step. skip-environments implies it"
+    required: false
+    default: "true"
   latest-only:
-    description: "For apply: refuse to run unless this run's commit is still the tip of its branch, so re-running an old run can't put old flag files back (true/false)"
+    description: "For apply: refuse to run if the flag files on the branch have changed since this run's commit, so re-running an old run can't put old flag files back (true/false)"
     required: false
     default: "true"
   skip-environments:
@@ -93,6 +97,7 @@ runs:
         INPUT_ENVIRONMENTS: ${{ inputs.environments }}
         INPUT_SKIP_ENVIRONMENTS: ${{ inputs.skip-environments }}
         INPUT_LATEST_ONLY: ${{ inputs.latest-only }}
+        INPUT_ALLOW_PRODUCTION: ${{ inputs.allow-production }}
       run: |
         require(require("node:path").join(process.env.GITHUB_ACTION_PATH, "dist", "action.cjs"));
 

@@ -190,9 +190,16 @@ export async function buildPlans(source: LiveSource, dir: string, onlyEnvs?: str
   for (const file of files) {
     const env = environments.find((e) => e.name.toLowerCase() === file.environment.toLowerCase());
     if (!env) {
-      throw new Error(
-        `YAML names environment "${file.environment}", but ${source.missing}: ${environments.map((e) => e.name).join(", ")}`,
-      );
+      // Report it as drift for this environment and go on with the others.
+      plans.push({
+        environment: file.environment,
+        changes: [{ kind: "environment", flag: "", known: environments.map((e) => e.name) }],
+        env: { id: -1, name: file.environment, api_key: "", project: 0 },
+        featureIds: new Map(),
+        segmentOrder: new Map(),
+        multivariate: new Set(),
+      });
+      continue;
     }
     const live = await source.readLive(env);
     plans.push({

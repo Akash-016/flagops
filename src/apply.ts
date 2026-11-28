@@ -1,6 +1,6 @@
 // Make the planned changes in Flagsmith.
 
-import { archiveConflicts, isAction, safe, segmentProblems, type Change } from "./diff.js";
+import { archiveConflicts, isAction, missingEnvironments, safe, segmentProblems, type Change } from "./diff.js";
 import type { FlagsmithClient } from "./flagsmith.js";
 import type { PlannedEnvironment } from "./state.js";
 
@@ -20,6 +20,8 @@ export async function applyPlans(
   // so change nothing until a person settles it.
   const conflicts = archiveConflicts(plans);
   if (conflicts.length > 0) throw new Error(conflicts.join("\n"));
+  const missing = missingEnvironments(plans);
+  if (missing.length > 0) throw new Error(`Flagsmith has no environment named ${missing.join(", ")}. Nothing changed. Rename the flag file's environment, or the environment in Flagsmith.`);
   // v2 feature versioning changes flags through versions, not the endpoints FlagOps uses.
   const versioned = plans.filter((p) => p.env.use_v2_feature_versioning && p.changes.some(isAction)).map((p) => p.environment);
   if (versioned.length > 0) {
