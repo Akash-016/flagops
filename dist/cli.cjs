@@ -312,17 +312,17 @@ var require_visit = __commonJS({
     visit2.BREAK = BREAK;
     visit2.SKIP = SKIP;
     visit2.REMOVE = REMOVE;
-    function visit_(key, node2, visitor, path5) {
-      const ctrl = callVisitor(key, node2, visitor, path5);
+    function visit_(key, node2, visitor, path6) {
+      const ctrl = callVisitor(key, node2, visitor, path6);
       if (identity.isNode(ctrl) || identity.isPair(ctrl)) {
-        replaceNode(key, path5, ctrl);
-        return visit_(key, ctrl, visitor, path5);
+        replaceNode(key, path6, ctrl);
+        return visit_(key, ctrl, visitor, path6);
       }
       if (typeof ctrl !== "symbol") {
         if (identity.isCollection(node2)) {
-          path5 = Object.freeze(path5.concat(node2));
+          path6 = Object.freeze(path6.concat(node2));
           for (let i = 0; i < node2.items.length; ++i) {
-            const ci = visit_(i, node2.items[i], visitor, path5);
+            const ci = visit_(i, node2.items[i], visitor, path6);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -333,13 +333,13 @@ var require_visit = __commonJS({
             }
           }
         } else if (identity.isPair(node2)) {
-          path5 = Object.freeze(path5.concat(node2));
-          const ck = visit_("key", node2.key, visitor, path5);
+          path6 = Object.freeze(path6.concat(node2));
+          const ck = visit_("key", node2.key, visitor, path6);
           if (ck === BREAK)
             return BREAK;
           else if (ck === REMOVE)
             node2.key = null;
-          const cv = visit_("value", node2.value, visitor, path5);
+          const cv = visit_("value", node2.value, visitor, path6);
           if (cv === BREAK)
             return BREAK;
           else if (cv === REMOVE)
@@ -360,17 +360,17 @@ var require_visit = __commonJS({
     visitAsync.BREAK = BREAK;
     visitAsync.SKIP = SKIP;
     visitAsync.REMOVE = REMOVE;
-    async function visitAsync_(key, node2, visitor, path5) {
-      const ctrl = await callVisitor(key, node2, visitor, path5);
+    async function visitAsync_(key, node2, visitor, path6) {
+      const ctrl = await callVisitor(key, node2, visitor, path6);
       if (identity.isNode(ctrl) || identity.isPair(ctrl)) {
-        replaceNode(key, path5, ctrl);
-        return visitAsync_(key, ctrl, visitor, path5);
+        replaceNode(key, path6, ctrl);
+        return visitAsync_(key, ctrl, visitor, path6);
       }
       if (typeof ctrl !== "symbol") {
         if (identity.isCollection(node2)) {
-          path5 = Object.freeze(path5.concat(node2));
+          path6 = Object.freeze(path6.concat(node2));
           for (let i = 0; i < node2.items.length; ++i) {
-            const ci = await visitAsync_(i, node2.items[i], visitor, path5);
+            const ci = await visitAsync_(i, node2.items[i], visitor, path6);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -381,13 +381,13 @@ var require_visit = __commonJS({
             }
           }
         } else if (identity.isPair(node2)) {
-          path5 = Object.freeze(path5.concat(node2));
-          const ck = await visitAsync_("key", node2.key, visitor, path5);
+          path6 = Object.freeze(path6.concat(node2));
+          const ck = await visitAsync_("key", node2.key, visitor, path6);
           if (ck === BREAK)
             return BREAK;
           else if (ck === REMOVE)
             node2.key = null;
-          const cv = await visitAsync_("value", node2.value, visitor, path5);
+          const cv = await visitAsync_("value", node2.value, visitor, path6);
           if (cv === BREAK)
             return BREAK;
           else if (cv === REMOVE)
@@ -414,23 +414,23 @@ var require_visit = __commonJS({
       }
       return visitor;
     }
-    function callVisitor(key, node2, visitor, path5) {
+    function callVisitor(key, node2, visitor, path6) {
       if (typeof visitor === "function")
-        return visitor(key, node2, path5);
+        return visitor(key, node2, path6);
       if (identity.isMap(node2))
-        return visitor.Map?.(key, node2, path5);
+        return visitor.Map?.(key, node2, path6);
       if (identity.isSeq(node2))
-        return visitor.Seq?.(key, node2, path5);
+        return visitor.Seq?.(key, node2, path6);
       if (identity.isPair(node2))
-        return visitor.Pair?.(key, node2, path5);
+        return visitor.Pair?.(key, node2, path6);
       if (identity.isScalar(node2))
-        return visitor.Scalar?.(key, node2, path5);
+        return visitor.Scalar?.(key, node2, path6);
       if (identity.isAlias(node2))
-        return visitor.Alias?.(key, node2, path5);
+        return visitor.Alias?.(key, node2, path6);
       return void 0;
     }
-    function replaceNode(key, path5, node2) {
-      const parent = path5[path5.length - 1];
+    function replaceNode(key, path6, node2) {
+      const parent = path6[path6.length - 1];
       if (identity.isCollection(parent)) {
         parent.items[key] = node2;
       } else if (identity.isPair(parent)) {
@@ -1042,10 +1042,10 @@ var require_Collection = __commonJS({
     var createNode = require_createNode();
     var identity = require_identity();
     var Node = require_Node();
-    function collectionFromPath(schema, path5, value) {
+    function collectionFromPath(schema, path6, value) {
       let v = value;
-      for (let i = path5.length - 1; i >= 0; --i) {
-        const k = path5[i];
+      for (let i = path6.length - 1; i >= 0; --i) {
+        const k = path6[i];
         if (typeof k === "number" && Number.isInteger(k) && k >= 0) {
           const a = [];
           a[k] = v;
@@ -1064,7 +1064,7 @@ var require_Collection = __commonJS({
         sourceObjects: /* @__PURE__ */ new Map()
       });
     }
-    var isEmptyPath = (path5) => path5 == null || typeof path5 === "object" && !!path5[Symbol.iterator]().next().done;
+    var isEmptyPath = (path6) => path6 == null || typeof path6 === "object" && !!path6[Symbol.iterator]().next().done;
     var Collection = class extends Node.NodeBase {
       constructor(type, schema) {
         super(type);
@@ -1094,11 +1094,11 @@ var require_Collection = __commonJS({
        * be a Pair instance or a `{ key, value }` object, which may not have a key
        * that already exists in the map.
        */
-      addIn(path5, value) {
-        if (isEmptyPath(path5))
+      addIn(path6, value) {
+        if (isEmptyPath(path6))
           this.add(value);
         else {
-          const [key, ...rest] = path5;
+          const [key, ...rest] = path6;
           const node2 = this.get(key, true);
           if (identity.isCollection(node2))
             node2.addIn(rest, value);
@@ -1112,8 +1112,8 @@ var require_Collection = __commonJS({
        * Removes a value from the collection.
        * @returns `true` if the item was found and removed.
        */
-      deleteIn(path5) {
-        const [key, ...rest] = path5;
+      deleteIn(path6) {
+        const [key, ...rest] = path6;
         if (rest.length === 0)
           return this.delete(key);
         const node2 = this.get(key, true);
@@ -1127,8 +1127,8 @@ var require_Collection = __commonJS({
        * scalar values from their surrounding node; to disable set `keepScalar` to
        * `true` (collections are always returned intact).
        */
-      getIn(path5, keepScalar) {
-        const [key, ...rest] = path5;
+      getIn(path6, keepScalar) {
+        const [key, ...rest] = path6;
         const node2 = this.get(key, true);
         if (rest.length === 0)
           return !keepScalar && identity.isScalar(node2) ? node2.value : node2;
@@ -1146,8 +1146,8 @@ var require_Collection = __commonJS({
       /**
        * Checks if the collection includes a value with the key `key`.
        */
-      hasIn(path5) {
-        const [key, ...rest] = path5;
+      hasIn(path6) {
+        const [key, ...rest] = path6;
         if (rest.length === 0)
           return this.has(key);
         const node2 = this.get(key, true);
@@ -1157,8 +1157,8 @@ var require_Collection = __commonJS({
        * Sets a value in this collection. For `!!set`, `value` needs to be a
        * boolean to add/remove the item from the set.
        */
-      setIn(path5, value) {
-        const [key, ...rest] = path5;
+      setIn(path6, value) {
+        const [key, ...rest] = path6;
         if (rest.length === 0) {
           this.set(key, value);
         } else {
@@ -3673,9 +3673,9 @@ var require_Document = __commonJS({
           this.contents.add(value);
       }
       /** Adds a value to the document. */
-      addIn(path5, value) {
+      addIn(path6, value) {
         if (assertCollection(this.contents))
-          this.contents.addIn(path5, value);
+          this.contents.addIn(path6, value);
       }
       /**
        * Create a new `Alias` node, ensuring that the target `node` has the required anchor.
@@ -3750,14 +3750,14 @@ var require_Document = __commonJS({
        * Removes a value from the document.
        * @returns `true` if the item was found and removed.
        */
-      deleteIn(path5) {
-        if (Collection.isEmptyPath(path5)) {
+      deleteIn(path6) {
+        if (Collection.isEmptyPath(path6)) {
           if (this.contents == null)
             return false;
           this.contents = null;
           return true;
         }
-        return assertCollection(this.contents) ? this.contents.deleteIn(path5) : false;
+        return assertCollection(this.contents) ? this.contents.deleteIn(path6) : false;
       }
       /**
        * Returns item at `key`, or `undefined` if not found. By default unwraps
@@ -3772,10 +3772,10 @@ var require_Document = __commonJS({
        * scalar values from their surrounding node; to disable set `keepScalar` to
        * `true` (collections are always returned intact).
        */
-      getIn(path5, keepScalar) {
-        if (Collection.isEmptyPath(path5))
+      getIn(path6, keepScalar) {
+        if (Collection.isEmptyPath(path6))
           return !keepScalar && identity.isScalar(this.contents) ? this.contents.value : this.contents;
-        return identity.isCollection(this.contents) ? this.contents.getIn(path5, keepScalar) : void 0;
+        return identity.isCollection(this.contents) ? this.contents.getIn(path6, keepScalar) : void 0;
       }
       /**
        * Checks if the document includes a value with the key `key`.
@@ -3786,10 +3786,10 @@ var require_Document = __commonJS({
       /**
        * Checks if the document includes a value at `path`.
        */
-      hasIn(path5) {
-        if (Collection.isEmptyPath(path5))
+      hasIn(path6) {
+        if (Collection.isEmptyPath(path6))
           return this.contents !== void 0;
-        return identity.isCollection(this.contents) ? this.contents.hasIn(path5) : false;
+        return identity.isCollection(this.contents) ? this.contents.hasIn(path6) : false;
       }
       /**
        * Sets a value in this document. For `!!set`, `value` needs to be a
@@ -3806,13 +3806,13 @@ var require_Document = __commonJS({
        * Sets a value in this document. For `!!set`, `value` needs to be a
        * boolean to add/remove the item from the set.
        */
-      setIn(path5, value) {
-        if (Collection.isEmptyPath(path5)) {
+      setIn(path6, value) {
+        if (Collection.isEmptyPath(path6)) {
           this.contents = value;
         } else if (this.contents == null) {
-          this.contents = Collection.collectionFromPath(this.schema, Array.from(path5), value);
+          this.contents = Collection.collectionFromPath(this.schema, Array.from(path6), value);
         } else if (assertCollection(this.contents)) {
-          this.contents.setIn(path5, value);
+          this.contents.setIn(path6, value);
         }
       }
       /**
@@ -5773,9 +5773,9 @@ var require_cst_visit = __commonJS({
     visit2.BREAK = BREAK;
     visit2.SKIP = SKIP;
     visit2.REMOVE = REMOVE;
-    visit2.itemAtPath = (cst, path5) => {
+    visit2.itemAtPath = (cst, path6) => {
       let item = cst;
-      for (const [field, index] of path5) {
+      for (const [field, index] of path6) {
         const tok = item?.[field];
         if (tok && "items" in tok) {
           item = tok.items[index];
@@ -5784,23 +5784,23 @@ var require_cst_visit = __commonJS({
       }
       return item;
     };
-    visit2.parentCollection = (cst, path5) => {
-      const parent = visit2.itemAtPath(cst, path5.slice(0, -1));
-      const field = path5[path5.length - 1][0];
+    visit2.parentCollection = (cst, path6) => {
+      const parent = visit2.itemAtPath(cst, path6.slice(0, -1));
+      const field = path6[path6.length - 1][0];
       const coll = parent?.[field];
       if (coll && "items" in coll)
         return coll;
       throw new Error("Parent collection not found");
     };
-    function _visit(path5, item, visitor) {
-      let ctrl = visitor(item, path5);
+    function _visit(path6, item, visitor) {
+      let ctrl = visitor(item, path6);
       if (typeof ctrl === "symbol")
         return ctrl;
       for (const field of ["key", "value"]) {
         const token = item[field];
         if (token && "items" in token) {
           for (let i = 0; i < token.items.length; ++i) {
-            const ci = _visit(Object.freeze(path5.concat([[field, i]])), token.items[i], visitor);
+            const ci = _visit(Object.freeze(path6.concat([[field, i]])), token.items[i], visitor);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -5811,10 +5811,10 @@ var require_cst_visit = __commonJS({
             }
           }
           if (typeof ctrl === "function" && field === "key")
-            ctrl = ctrl(item, path5);
+            ctrl = ctrl(item, path6);
         }
       }
-      return typeof ctrl === "function" ? ctrl(item, path5) : ctrl;
+      return typeof ctrl === "function" ? ctrl(item, path6) : ctrl;
     }
     exports2.visit = visit2;
   }
@@ -7566,8 +7566,8 @@ var require_dist2 = __commonJS({
 });
 
 // src/cli.ts
-var import_promises3 = require("node:fs/promises");
-var import_node_path4 = __toESM(require("node:path"), 1);
+var import_promises4 = require("node:fs/promises");
+var import_node_path5 = __toESM(require("node:path"), 1);
 
 // node_modules/commander/lib/error.js
 var CommanderError = class extends Error {
@@ -10680,9 +10680,9 @@ Expecting one of '${allowedValues.join("', '")}'`);
    * @param {string} [path]
    * @return {(string|null|Command)}
    */
-  executableDir(path5) {
-    if (path5 === void 0) return this._executableDir;
-    this._executableDir = path5;
+  executableDir(path6) {
+    if (path6 === void 0) return this._executableDir;
+    this._executableDir = path6;
     return this;
   }
   /**
@@ -11039,9 +11039,9 @@ var FlagsmithClient = class {
     return await res.json();
   }
   // Follows "next" links so we get every item, not just the first page.
-  async getAll(path5) {
+  async getAll(path6) {
     const items = [];
-    let url2 = this.apiUrl + path5;
+    let url2 = this.apiUrl + path6;
     const seen = /* @__PURE__ */ new Set();
     while (url2) {
       if (seen.has(url2)) throw new Error(`Flagsmith paging loops back to ${url2}`);
@@ -11956,10 +11956,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path5) {
-  if (!path5)
+function getElementAtPath(obj, path6) {
+  if (!path6)
     return obj;
-  return path5.reduce((acc, key) => acc?.[key], obj);
+  return path6.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -12299,11 +12299,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path5, issues) {
+function prefixIssues(path6, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path5);
+    iss.path.unshift(path6);
     return iss;
   });
 }
@@ -12765,16 +12765,16 @@ function flattenError(error62, mapper = (issue2) => issue2.message) {
 }
 function formatError(error62, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error63, path5 = []) => {
+  const processError = (error63, path6 = []) => {
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path5, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else {
-        const fullpath = [...path5, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -12813,17 +12813,17 @@ function formatError(error62, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error62, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error63, path5 = []) => {
+  const processError = (error63, path6 = []) => {
     var _a3;
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path5, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else {
-        const fullpath = [...path5, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -12862,8 +12862,8 @@ function treeifyError(error62, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path5 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path5) {
+  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path6) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -30001,13 +30001,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path5 = ref.slice(1).split("/").filter(Boolean);
-  if (path5.length === 0) {
+  const path6 = ref.slice(1).split("/").filter(Boolean);
+  if (path6.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path5[0] === defsKey) {
-    const key = path5[1] === void 0 ? void 0 : decodeJSONPointerSegment(path5[1]);
+  if (path6[0] === defsKey) {
+    const key = path6[1] === void 0 ? void 0 : decodeJSONPointerSegment(path6[1]);
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -30972,7 +30972,7 @@ ${problems}`);
 }
 
 // src/cli.ts
-var import_promises4 = require("node:readline/promises");
+var import_promises5 = require("node:readline/promises");
 
 // src/references.ts
 var import_promises = require("node:fs/promises");
@@ -31729,7 +31729,69 @@ function describeAction(c) {
   return `${c.kind === "create" ? "+" : "~"} ${safe(c.flag)}`;
 }
 
+// src/init.ts
+var import_promises3 = require("node:fs/promises");
+var import_node_path4 = __toESM(require("node:path"), 1);
+var WORKFLOWS = ["flagops-validate.yml", "flagops-plan.yml", "flagops-apply.yml", "flagops-drift.yml"];
+var yamlValue = (s) => /^[A-Za-z0-9_.-]+$/.test(s) ? s : JSON.stringify(s);
+function customize(template, opts) {
+  let s = template.replace(/^# Copy to \.github\/workflows\/ in the repo that holds your flag files\.\n/, "# Written by flagops init.\n");
+  if (opts.production !== "Production") {
+    s = s.replace(/^(\s+(?:skip-)?environments:) Production\b/gm, `$1 ${yamlValue(opts.production)}`);
+  }
+  if (opts.dir !== "flags") {
+    s = s.replace(/"flags\/\*\*"/g, JSON.stringify(`${opts.dir}/**`));
+    s = s.replace(/^(\s+)command: (\w+)$/gm, (_, indent, command) => `${indent}command: ${command}
+${indent}dir: ${yamlValue(opts.dir)}`);
+  }
+  return s;
+}
+var exists = (file2) => (0, import_promises3.access)(file2).then(
+  () => true,
+  () => false
+);
+async function writeWorkflows(repoDir, templatesDir, opts) {
+  const out = import_node_path4.default.join(repoDir, ".github", "workflows");
+  await (0, import_promises3.mkdir)(out, { recursive: true });
+  const written = [];
+  const kept = [];
+  for (const name of WORKFLOWS) {
+    const target = import_node_path4.default.join(out, name);
+    if (!opts.force && await exists(target)) {
+      kept.push(name);
+      continue;
+    }
+    await (0, import_promises3.writeFile)(target, customize(await (0, import_promises3.readFile)(import_node_path4.default.join(templatesDir, name), "utf8"), opts), "utf8");
+    written.push(name);
+  }
+  return { written, kept };
+}
+function githubRepo(remoteUrl) {
+  return /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(remoteUrl.trim())?.[1];
+}
+function checklist(opts, repo) {
+  const settings = repo ? `https://github.com/${repo}/settings` : "your repository's Settings";
+  const prod = opts.production;
+  return [
+    "Left to do in GitHub (about 20 minutes; the README's quick start has details):",
+    "",
+    `1. Variable FLAGSMITH_API_URL, your Flagsmith API address (${repo ? `${settings}/variables/actions` : "Settings -> Secrets and variables -> Actions -> Variables"}):`,
+    "     gh variable set FLAGSMITH_API_URL --body https://flagsmith.example.com/api/v1",
+    "2. Secret FLAGSMITH_ENVIRONMENT_KEYS: one read-only server-side key per environment (Flagsmith: Environment settings -> SDK Keys), separated by spaces:",
+    "     gh secret set FLAGSMITH_ENVIRONMENT_KEYS",
+    `3. Environments "non-production" and "production" (${repo ? `${settings}/environments` : "Settings -> Environments"}): both limited to the main branch, each with the secret FLAGSMITH_ADMIN_KEY:`,
+    "     gh secret set FLAGSMITH_ADMIN_KEY --env non-production",
+    "     gh secret set FLAGSMITH_ADMIN_KEY --env production",
+    `   On "production" also add Required reviewers, turn on Prevent self-review, and turn off Allow administrators to bypass.`,
+    `4. A ruleset on main (${repo ? `${settings}/rules` : "Settings -> Rules"}): require a pull request, the "validate" check, and code owner review for /.github/.`,
+    `5. Export your flags and commit them: flagops pull --dir ${opts.dir}`,
+    "",
+    `The apply workflow treats "${prod}" as production and applies every other environment first.`
+  ].join("\n");
+}
+
 // src/cli.ts
+var import_node_child_process2 = require("node:child_process");
 for (const method of ["log", "error"]) {
   const write = console[method];
   console[method] = (...args) => write(...args.map((a) => typeof a === "string" ? guardOutput(a) : a));
@@ -31754,6 +31816,14 @@ async function resolveProject(fs2, wanted) {
     `Several projects found. Pick one with --project: ${projects.map((p) => `${p.id} (${p.name})`).join(", ")}`
   );
 }
+program2.command("init").description("Add the FlagOps GitHub workflows to this repo and list the setup steps left to do").option("-d, --dir <dir>", "folder for the flag files", "flags").option("--production <name>", "name of your production environment in Flagsmith", "Production").option("--force", "overwrite workflow files that already exist").action(async (opts) => {
+  const options = { dir: opts.dir, production: opts.production, force: Boolean(opts.force) };
+  const { written, kept } = await writeWorkflows(".", import_node_path5.default.resolve(__dirname, "..", "examples", "workflows"), options);
+  for (const name of written) console.log(`  wrote .github/workflows/${name}`);
+  for (const name of kept) console.log(`  kept  .github/workflows/${name} (already there; --force overwrites it)`);
+  const remote = (0, import_node_child_process2.spawnSync)("git", ["config", "--get", "remote.origin.url"], { encoding: "utf8" }).stdout ?? "";
+  console.log("\n" + checklist(options, githubRepo(remote)));
+});
 program2.command("check").description("Check the connection to Flagsmith").action(async () => {
   const projects = await client().listProjects();
   console.log(`Connected to ${getConfig().apiUrl}`);
@@ -31772,7 +31842,7 @@ program2.command("pull").description("Export each environment's flags to <dir>/<
   const segmentCount = new Map(names.map((n) => [n, names.filter((m) => m === n).length]));
   const files = [];
   for (const env of environments) {
-    const target = import_node_path4.default.join(opts.dir, fileNameFor(env.name));
+    const target = import_node_path5.default.join(opts.dir, fileNameFor(env.name));
     const other = files.find((f) => f.target === target);
     if (other) throw new Error(`Environments "${other.file.environment}" and "${env.name}" would both be written to ${target}. Rename one in Flagsmith.`);
     const live = await source.readLive(env);
@@ -31802,9 +31872,9 @@ program2.command("pull").description("Export each environment's flags to <dir>/<
     for (const name of skipped.keys()) delete file2.flags[name];
     for (const name of noOverrides.keys()) if (file2.flags[name]) delete file2.flags[name].segments;
   }
-  await (0, import_promises3.mkdir)(opts.dir, { recursive: true });
+  await (0, import_promises4.mkdir)(opts.dir, { recursive: true });
   for (const { target, file: file2 } of files) {
-    await (0, import_promises3.writeFile)(target, toYaml(file2), "utf8");
+    await (0, import_promises4.writeFile)(target, toYaml(file2), "utf8");
     console.log(`  wrote ${target} (${Object.keys(file2.flags).length} flags)`);
   }
   for (const [name, reason] of skipped) {
@@ -31839,14 +31909,14 @@ program2.command("plan").description("Show what apply would change, without chan
   }
   const output2 = opts.format === "markdown" ? formatPlanMarkdown(plans, refs, notes) : formatPlan(plans, refs);
   console.log(output2);
-  if (opts.out) await (0, import_promises3.writeFile)(opts.out, output2, "utf8");
+  if (opts.out) await (0, import_promises4.writeFile)(opts.out, output2, "utf8");
 });
 program2.command("drift").description("Check whether Flagsmith still matches the flag files. Exit code 2 means drift.").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("--skip-env <name>", "leave this environment out (repeat for more)", collect).option("-f, --format <format>", "text or markdown", "text").option("-o, --out <file>", "also write the report to this file").action(async (opts) => {
   if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
   const plans = await buildPlans(await readSource(opts.project), opts.dir, opts.env, opts.skipEnv);
   const output2 = opts.format === "markdown" ? formatDriftMarkdown(plans) : formatDrift(plans);
   console.log(output2);
-  if (opts.out) await (0, import_promises3.writeFile)(opts.out, output2, "utf8");
+  if (opts.out) await (0, import_promises4.writeFile)(opts.out, output2, "utf8");
   if (countDrift(plans) > 0) process.exitCode = 2;
 });
 program2.command("stale").description("List flags with the same setting in every environment, unchanged for N days").option("-p, --project <id-or-name>", "Flagsmith project").option("--days <n>", "how long a flag must be unchanged", "30").option("-d, --dir <dir>", "folder with the flag files (left out of the code search)", "flags").option("--code <dir>", "folder to search for code that uses the flags", ".").option("--no-code", "don't search the code").option("-f, --format <format>", "text or markdown", "text").option("-o, --out <file>", "also write the report to this file").action(async (opts) => {
@@ -31872,7 +31942,7 @@ program2.command("stale").description("List flags with the same setting in every
   const refs = opts.code === false ? void 0 : await findReferences(opts.code, stale.filter((s) => !s.keptBecause).map((s) => s.name), [opts.dir]);
   const output2 = opts.format === "markdown" ? formatStaleMarkdown(stale, days, refs) : formatStale(stale, days, refs);
   console.log(output2);
-  if (opts.out) await (0, import_promises3.writeFile)(opts.out, output2, "utf8");
+  if (opts.out) await (0, import_promises4.writeFile)(opts.out, output2, "utf8");
 });
 program2.command("apply").description("Make Flagsmith match the YAML files (never deletes flags)").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("--skip-env <name>", "leave this environment out (repeat for more)", collect).option("-y, --yes", "don't ask for confirmation (for CI)").action(async (opts) => {
   const fs2 = client();
@@ -31894,7 +31964,7 @@ ${skipped.map((s) => `  ${s}`).join("\n")}`);
   }
   if (!opts.yes) {
     if (!process.stdin.isTTY) throw new Error("Not asking for confirmation without a terminal. Use --yes.");
-    const rl = (0, import_promises4.createInterface)({ input: process.stdin, output: process.stdout });
+    const rl = (0, import_promises5.createInterface)({ input: process.stdin, output: process.stdout });
     const answer = await rl.question("\nApply these changes? (y/n) ");
     rl.close();
     if (answer.trim().toLowerCase() !== "y") {

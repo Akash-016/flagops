@@ -79,14 +79,21 @@ npx github:Akash-016/flagops plan     # what would change
 npx github:Akash-016/flagops apply    # make the change (asks first)
 ```
 
-**5. Add the GitHub Action** to the repo that holds your `flags/` folder
+**5. Set up the GitHub Action for your team** (about 20 minutes) in the repo that holds your `flags/` folder
 
-1. Copy the four files from [`examples/workflows/`](examples/workflows) to `.github/workflows/`.
-2. In Flagsmith, create a server-side key for each environment (Environment settings → SDK Keys → Server-side). These can read flags but not change them.
-3. Settings → Secrets and variables → Actions: add the variable `FLAGSMITH_API_URL` and the secret `FLAGSMITH_ENVIRONMENT_KEYS` (the server-side keys, separated by spaces). `plan` and `drift` use these.
-4. Settings → Environments: create `non-production` and `production`. For both, set Deployment branches to `main` only and add the environment secret `FLAGSMITH_ADMIN_KEY`. For `production`, also add Required reviewers, turn on Prevent self-review, and turn off Allow administrators to bypass (on by default). Only `apply` uses the admin key. **Check your GitHub plan:** in private repositories, environments (with their secrets and branch limits) need GitHub Pro, Team or Enterprise, and required reviewers need Enterprise. On GitHub Free, use a public repository.
-5. Protect `main` with a ruleset: require a pull request with at least one approval, require review from code owners, and make `validate` a required status check. Add a `CODEOWNERS` line such as `/.github/ @your-team`, so workflow changes (and `CODEOWNERS` itself) need review.
-6. Read the [security model](#security-model).
+```bash
+npx github:Akash-016/flagops init                         # writes the four workflows into .github/workflows/
+npx github:Akash-016/flagops init --production "Prod EU"  # if production has another name (or --dir for another folder)
+```
+
+`init` writes the [example workflows](examples/workflows), adjusted to your folder and production name, and prints the steps below with links to your repository's settings pages. Then:
+
+- [ ] **Read-only keys.** In Flagsmith, create a server-side key for each environment (Environment settings → SDK Keys → Server-side). These can read flags but not change them.
+- [ ] **Variable and secret.** Settings → Secrets and variables → Actions: add the variable `FLAGSMITH_API_URL` and the secret `FLAGSMITH_ENVIRONMENT_KEYS` (the server-side keys, separated by spaces). `plan` and `drift` use these.
+- [ ] **Environments.** Settings → Environments: create `non-production` and `production`. For both, set Deployment branches to `main` only and add the environment secret `FLAGSMITH_ADMIN_KEY`. For `production`, also add Required reviewers, turn on Prevent self-review, and turn off Allow administrators to bypass (on by default). Only `apply` uses the admin key. **Check your GitHub plan:** in private repositories, environments (with their secrets and branch limits) need GitHub Pro, Team or Enterprise, and required reviewers need Enterprise. On GitHub Free, use a public repository.
+- [ ] **Ruleset.** Protect `main` with a ruleset: require a pull request with at least one approval, require review from code owners, and make `validate` a required status check. Add a `CODEOWNERS` line such as `/.github/ @your-team`, so workflow changes (and `CODEOWNERS` itself) need review.
+- [ ] **Flags in Git.** Run `flagops pull`, commit `flags/`, and open a pull request with one small change to see the plan comment.
+- [ ] Read the [security model](#security-model).
 
 The examples use GitHub's `ubuntu-latest` runners, which need Flagsmith on an address they can reach. If Flagsmith runs on a private network, use a [self-hosted runner](https://docs.github.com/en/actions/hosting-your-own-runners), preferably in a private repo on a plan that has environments and required reviewers (see step 4). On a public repo, follow the runner advice in the [security model](#security-model). The [demo repo](https://github.com/Akash-016/flagops-demo) is public and runs Flagsmith on the maintainer's machine.
 
@@ -118,6 +125,7 @@ With read-only keys, segment overrides and their priorities come from the enviro
 
 | Command | What it does |
 |---|---|
+| `flagops init` | Write the four GitHub workflows into `.github/workflows/` and list the setup steps left (`--production`, `--dir`, `--force`) |
 | `flagops validate` | Check the flag files without connecting to Flagsmith: schema, one file per environment, same flags in every file |
 | `flagops check` | Test the connection and list projects |
 | `flagops pull` | Write each environment's flags to `flags/<environment>.yaml` |
@@ -135,6 +143,7 @@ Common options:
 | `-p, --project <id or name>` | Pick the project if there are several |
 | `-d, --dir <dir>` | Folder with the flag files (default `flags`) |
 | `-e, --env <name>` | Only this environment; repeat for more |
+| `--skip-env <name>` | Leave this environment out; repeat for more |
 | `-f, --format markdown` | Markdown output (used for PR comments and issues) |
 | `--code <dir>` / `--no-code` | Where to search for flag usage, or don't search |
 
