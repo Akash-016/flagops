@@ -30,6 +30,9 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # the Action posts its plan comment on pull requests to this repo
     env:
       FLAGSMITH_API_URL: http://localhost:8000/api/v1
     steps:
@@ -250,7 +253,9 @@ jobs:
           api-url: ${{ env.FLAGSMITH_API_URL }}
           environment-keys: ${{ env.CI_ENV_KEYS }}
           dir: ${{ env.CI_FLAGS_DIR }}
-          comment: "false"
+          # On a pull request from this repo (not a fork, whose token can't write), post the
+          # real comment, so the comment step is tested end to end.
+          comment: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: "Action: drift with the admin key"
         id: drift
@@ -286,6 +291,17 @@ jobs:
           grep -q "changed outside Git" "$RUNNER_TEMP/flagops-drift.md"
           grep -q "read-only keys" "$RUNNER_TEMP/flagops-plan.md"
           node dist/cli.cjs drift --dir "$CI_FLAGS_DIR"
+
+      - name: Check the plan comment on the pull request
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.user.type == "Bot" and (.body | startswith("<!-- flagops-plan -->")))] | length' > count.txt
+          echo "FlagOps plan comments on this pull request: $(cat count.txt)"
+          [ "$(cat count.txt)" = 1 ] || { echo "::error::expected exactly one plan comment"; exit 1; }
 
       - name: Flagsmith logs on failure
         if: failure()
