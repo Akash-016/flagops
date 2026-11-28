@@ -213,7 +213,7 @@ If Flagsmith holds a flag whose name or value FlagOps can't write back unchanged
 
 `@v1` moves to each compatible release. In jobs that hold the admin key, you can pin a commit instead (`Akash-016/flagops@<sha>`) and update it on purpose, like any other dependency.
 
-The Action is a prebuilt bundle (`dist/`), so it installs nothing and runs in seconds. CI runs `validate`, `plan`, `drift` and `apply` through the Action on Linux against Flagsmith in Docker; the demo runs it on a Windows self-hosted runner.
+The Action is a prebuilt bundle (`dist/`), so it installs no packages; it only sets up Node. CI runs `validate`, `plan`, `drift` and `apply` through the Action on Linux against Flagsmith in Docker; the demo runs it on a Windows self-hosted runner.
 
 ## Security model
 
@@ -244,6 +244,8 @@ FlagOps makes Git the record of every flag change, and makes production changes 
 - `apply` never deletes flags. Flags removed from YAML are reported as "left alone".
 - `apply` stops at the first failed change and lists what it did; there is no rollback. Run it again after fixing the cause.
 - `apply` makes each environment match its whole flag file, not only the flags a merge changed. A dashboard change made since the last drift check is undone by the next apply. The example apply workflow writes the Production plan to the run summary before the approval, so the reviewer sees such a change first.
+- The Production plan in the run summary is made before the approval. A dashboard change in Production between that plan and the approval is applied over too; the production job's log lists what it changed, and the next drift check would have reported it.
+- `apply` refuses to run for a commit that is no longer the tip of its branch, so re-running an old workflow run can't put old flag files back (`latest-only: false` turns this off).
 - Rejecting the production deployment leaves Development and Staging applied and Git ahead of Production. Revert the pull request; otherwise the next drift check reports the difference and the next approved apply makes the rejected change.
 - Creating a flag creates it in every environment, even with `--env`.
 - Environment documents don't say whether a flag is archived, so with read-only keys, `plan` and `drift` compare archived flags' settings but can't see a flag archived or unarchived in the dashboard. The plan comment says so. Commands with the admin key notice, and `apply` stops with a message saying what to do.

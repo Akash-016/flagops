@@ -104,7 +104,8 @@ export interface OverrideState {
 
 // A Flagsmith that never answers should fail the run, not hang it. FLAGSMITH_TIMEOUT
 // (seconds) raises the limit for a slow or very large instance.
-const TIMEOUT_MS = (Number(process.env.FLAGSMITH_TIMEOUT) || 30) * 1000;
+const timeoutSetting = Number(process.env.FLAGSMITH_TIMEOUT);
+const TIMEOUT_MS = (Number.isFinite(timeoutSetting) && timeoutSetting >= 1 && timeoutSetting <= 3600 ? timeoutSetting : 30) * 1000;
 
 // GETs are safe to repeat, so a slow or briefly failing Flagsmith gets two more tries.
 // Writes are not retried after a timeout or 5xx: the change may still have happened.

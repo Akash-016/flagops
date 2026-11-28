@@ -135,6 +135,17 @@ flags:
     expect(plan.segmentOrder.get("a")).toEqual(["beta"]);
   });
 
+  it("leaves out skipped environments, and stops on an unknown one", async () => {
+    const dir = await flagsDir(["dark_mode"]);
+    await writeFile(path.join(dir, "qa.yaml"), "environment: QA\nflags:\n  dark_mode:\n    enabled: true\n    value: null\n");
+    const twoEnvs: LiveSource = {
+      ...source({ dark_mode: false }),
+      listEnvironments: async () => [{ id: 1, name: "Production", api_key: "k", project: 1 }, { id: 2, name: "QA", api_key: "q", project: 1 }],
+    };
+    expect((await buildPlans(twoEnvs, dir, undefined, ["production"])).map((p) => p.environment)).toEqual(["QA"]);
+    await expect(buildPlans(twoEnvs, dir, undefined, ["Prod"])).rejects.toThrow(/to skip: prod/);
+  });
+
   it("plans normally otherwise", async () => {
     const dir = await flagsDir(["dark_mode"]);
     const [plan] = await buildPlans(source({ dark_mode: false }, ["old_flag"]), dir);

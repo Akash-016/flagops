@@ -27137,16 +27137,19 @@ var flagSchema = external_exports.strictObject({
 }));
 var BAD_NAME = /[\x00-\x1f\x7f]/;
 var BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+var INVISIBLE = /[\u00ad\u200b-\u200d\u2060\ufeff]/;
 function nameProblem(name) {
   if (name === "" || BAD_NAME.test(name)) return "flag names can't be empty or contain control characters";
   if (BIDI.test(name)) return "flag names can't contain text-direction characters (they can make one name look like another)";
+  if (INVISIBLE.test(name)) return "flag names can't contain invisible characters (they can make one name look like another)";
+  if (name === "__proto__") return "a flag can't be named __proto__ (a JavaScript object can't hold that key)";
   if (EDGE_SPACE.test(name)) return "Flagsmith trims leading and trailing spaces from flag names; remove them";
   if ([...name].length > MAX_NAME) return `flag names can be at most ${MAX_NAME} characters`;
   return void 0;
 }
 var flagFileSchema = external_exports.strictObject({
   environment: external_exports.string().min(1),
-  flags: external_exports.record(external_exports.string(), flagSchema).default({}).superRefine((flags, ctx) => {
+  flags: external_exports.preprocess((v) => v === null ? {} : v, external_exports.record(external_exports.string(), flagSchema)).default({}).superRefine((flags, ctx) => {
     const seen = /* @__PURE__ */ new Map();
     for (const name of Object.keys(flags)) {
       const problem = nameProblem(name);
@@ -27209,7 +27212,7 @@ ${body.split("\n").slice(1).join("\n")}` });
     return "opened";
   }
   if (drift && existing) {
-    await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
+    await github.rest.issues.update({ owner, repo, issue_number: existing.number, title: "Flag drift: Flagsmith no longer matches Git", body });
     log.info(`Updated drift issue #${existing.number}`);
     return "updated";
   }

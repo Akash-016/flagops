@@ -27131,16 +27131,19 @@ var flagSchema = external_exports.strictObject({
 }));
 var BAD_NAME = /[\x00-\x1f\x7f]/;
 var BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+var INVISIBLE = /[\u00ad\u200b-\u200d\u2060\ufeff]/;
 function nameProblem(name) {
   if (name === "" || BAD_NAME.test(name)) return "flag names can't be empty or contain control characters";
   if (BIDI.test(name)) return "flag names can't contain text-direction characters (they can make one name look like another)";
+  if (INVISIBLE.test(name)) return "flag names can't contain invisible characters (they can make one name look like another)";
+  if (name === "__proto__") return "a flag can't be named __proto__ (a JavaScript object can't hold that key)";
   if (EDGE_SPACE.test(name)) return "Flagsmith trims leading and trailing spaces from flag names; remove them";
   if ([...name].length > MAX_NAME) return `flag names can be at most ${MAX_NAME} characters`;
   return void 0;
 }
 var flagFileSchema = external_exports.strictObject({
   environment: external_exports.string().min(1),
-  flags: external_exports.record(external_exports.string(), flagSchema).default({}).superRefine((flags, ctx) => {
+  flags: external_exports.preprocess((v) => v === null ? {} : v, external_exports.record(external_exports.string(), flagSchema)).default({}).superRefine((flags, ctx) => {
     const seen = /* @__PURE__ */ new Map();
     for (const name of Object.keys(flags)) {
       const problem = nameProblem(name);
@@ -27168,7 +27171,9 @@ function driftFailedMarkdown(reason) {
     "",
     "The drift check couldn't compare Flagsmith with Git, so drift may be going unnoticed:",
     "",
-    "<pre>" + text(reason) + "</pre>",
+    "<pre>" + text(reason.split("\n")[0].slice(0, 200)) + "</pre>",
+    "",
+    "The full message is in the run log.",
     "",
     "Fix the cause and run the check again. This issue closes itself once Flagsmith and Git match."
   ].join("\n") + "\n";
@@ -27204,10 +27209,28 @@ if (command === "apply" || !hasEnvKeys) {
 if (!process.env.FLAGSMITH_API_URL?.trim()) {
   fail("api-url is empty. Add a repository variable FLAGSMITH_API_URL (Settings -> Secrets and variables -> Actions -> Variables).");
 }
+if (command === "apply" && input2("LATEST_ONLY") !== "false") {
+  const ref = process.env.GITHUB_REF ?? "";
+  const sha = process.env.GITHUB_SHA ?? "";
+  if (ref.startsWith("refs/heads/") && sha) {
+    const branch = ref.slice("refs/heads/".length);
+    const r = (0, import_node_child_process.spawnSync)("git", ["ls-remote", "origin", ref], { encoding: "utf8", cwd: process.env.GITHUB_WORKSPACE });
+    const tip = (r.stdout ?? "").split(/\s/)[0];
+    if (r.status !== 0 || !tip) {
+      fail(`Couldn't check that ${sha.slice(0, 7)} is still the latest commit on ${branch} (is the repository checked out?). Set latest-only: false to skip this check.`);
+    }
+    if (tip !== sha) {
+      fail(`This run is for ${sha.slice(0, 7)}, but ${branch} is now at ${tip.slice(0, 7)}. Re-running an old run would apply old flag files; start a new run instead.`);
+    }
+  }
+}
 var args = ["--dir", input2("DIR") || "flags"];
 if (input2("PROJECT")) args.push("--project", input2("PROJECT"));
 for (const env of input2("ENVIRONMENTS").split(",").map((e) => e.trim()).filter(Boolean)) {
   args.push("--env", env);
+}
+for (const env of input2("SKIP_ENVIRONMENTS").split(",").map((e) => e.trim()).filter(Boolean)) {
+  args.push("--skip-env", env);
 }
 var runnerTemp = process.env.RUNNER_TEMP ?? ".";
 var reportFile = import_node_path.default.join(runnerTemp, `flagops-${command}.md`);

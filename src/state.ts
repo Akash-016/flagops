@@ -1,6 +1,6 @@
 // Load both sides of the comparison: the YAML files and live Flagsmith.
 
-import { readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseFlagFile, type FlagFile } from "./flagfile.js";
 import { fromTyped, readEnvironmentDocument, type Environment, type EnvironmentDocument, type Feature, type FlagsmithClient } from "./flagsmith.js";
@@ -30,6 +30,9 @@ async function readNamedFlagFiles(dir: string): Promise<NamedFlagFile[]> {
   const files: NamedFlagFile[] = [];
   const seen = new Map<string, string>();
   for (const name of names) {
+    if ((await lstat(path.join(dir, name))).isSymbolicLink()) {
+      throw new Error(`${name} is a symbolic link. Flag files must be regular files in "${dir}".`);
+    }
     const file = parseFlagFile(await readFile(path.join(dir, name), "utf8"), name);
     const key = file.environment.toLowerCase();
     if (seen.has(key)) {
@@ -151,7 +154,8 @@ export interface PlannedEnvironment extends EnvironmentPlan {
 
 // Build the plan for every YAML file. Fails if a file names an environment the source doesn't have.
 // onlyEnvs: if given, only these environments (by name, any case) are planned.
-export async function buildPlans(source: LiveSource, dir: string, onlyEnvs?: string[]): Promise<PlannedEnvironment[]> {
+// skipEnvs: environments left out, e.g. Production for the job that applies everything else.
+export async function buildPlans(source: LiveSource, dir: string, onlyEnvs?: string[], skipEnvs?: string[]): Promise<PlannedEnvironment[]> {
   const [allFiles, environments] = await Promise.all([readFlagFiles(dir), source.listEnvironments()]);
 
   let files = allFiles;
@@ -160,6 +164,12 @@ export async function buildPlans(source: LiveSource, dir: string, onlyEnvs?: str
     files = allFiles.filter((f) => wanted.includes(f.environment.toLowerCase()));
     const missing = wanted.filter((w) => !files.some((f) => f.environment.toLowerCase() === w));
     if (missing.length > 0) throw new Error(`No flag file for environment(s): ${missing.join(", ")}`);
+  }
+  if (skipEnvs && skipEnvs.length > 0) {
+    const skip = skipEnvs.map((e) => e.toLowerCase());
+    const unknown = skip.filter((w) => !allFiles.some((f) => f.environment.toLowerCase() === w));
+    if (unknown.length > 0) throw new Error(`No flag file for environment(s) to skip: ${unknown.join(", ")}`);
+    files = files.filter((f) => !skip.includes(f.environment.toLowerCase()));
   }
 
   // Only the Admin API can tell archived flags apart; with it, a flag archived on one side

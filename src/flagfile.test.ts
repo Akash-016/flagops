@@ -94,6 +94,13 @@ describe("parseFlagFile", () => {
     expect(long(2000)).not.toThrow();
   });
 
+  it("rejects __proto__ and invisible characters in names, and accepts an empty flags list", () => {
+    expect(() => parseFlagFile('environment: Dev\nflags:\n  __proto__:\n    enabled: true\n    value: null\n', "dev.yaml")).toThrow(/__proto__/);
+    expect(named("dark" + String.fromCharCode(0x200b) + "mode")).toThrow(/invisible/);
+    expect(parseFlagFile("environment: Dev\nflags:\n", "dev.yaml").flags).toEqual({});
+    expect(Object.keys(buildFlagFile("Dev", [feature(1, "__proto__"), feature(2, "constructor")], [state(1, true), state(2, true)]).flags)).toEqual(["constructor"]);
+  });
+
   it("rejects text-direction characters in names, which can make one name look like another", () => {
     expect(named("admin" + String.fromCharCode(0x202e) + "nimda")).toThrow(/text-direction/);
     expect(named("flag" + String.fromCharCode(0x2066))).toThrow(/text-direction/);
