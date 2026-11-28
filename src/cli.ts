@@ -23,6 +23,8 @@ import { findReferences } from "./references.js";
 import { findStaleFlags, formatStale, formatStaleMarkdown } from "./stale.js";
 import { adminSource, buildPlans, keySource, readFlagFiles, type LiveSource } from "./state.js";
 import { applyPlans } from "./apply.js";
+import { checklist, githubRepo, writeWorkflows } from "./init.js";
+import { spawnSync } from "node:child_process";
 
 for (const method of ["log", "error"] as const) {
   const write = console[method];
@@ -55,6 +57,22 @@ async function resolveProject(fs: FlagsmithClient, wanted?: string): Promise<Pro
     `Several projects found. Pick one with --project: ${projects.map((p) => `${p.id} (${p.name})`).join(", ")}`,
   );
 }
+
+program
+  .command("init")
+  .description("Add the FlagOps GitHub workflows to this repo and list the setup steps left to do")
+  .option("-d, --dir <dir>", "folder for the flag files", "flags")
+  .option("--production <name>", "name of your production environment in Flagsmith", "Production")
+  .option("--force", "overwrite workflow files that already exist")
+  .action(async (opts: { dir: string; production: string; force?: boolean }) => {
+    const options = { dir: opts.dir, production: opts.production, force: Boolean(opts.force) };
+    // The example workflows ship with FlagOps, next to dist/.
+    const { written, kept } = await writeWorkflows(".", path.resolve(__dirname, "..", "examples", "workflows"), options);
+    for (const name of written) console.log(`  wrote .github/workflows/${name}`);
+    for (const name of kept) console.log(`  kept  .github/workflows/${name} (already there; --force overwrites it)`);
+    const remote = spawnSync("git", ["config", "--get", "remote.origin.url"], { encoding: "utf8" }).stdout ?? "";
+    console.log("\n" + checklist(options, githubRepo(remote)));
+  });
 
 program
   .command("check")
