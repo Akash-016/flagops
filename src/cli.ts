@@ -24,6 +24,7 @@ import { findStaleFlags, formatStale, formatStaleMarkdown } from "./stale.js";
 import { adminSource, buildPlans, keySource, readFlagFiles, type LiveSource } from "./state.js";
 import { applyPlans } from "./apply.js";
 import { checklist, githubRepo, writeWorkflows } from "./init.js";
+import { planSetup, realGh, runSetup } from "./setup.js";
 import { spawnSync } from "node:child_process";
 
 for (const method of ["log", "error"] as const) {
@@ -72,6 +73,72 @@ program
     for (const name of kept) console.log(`  kept  .github/workflows/${name} (already there; --force overwrites it)`);
     const remote = spawnSync("git", ["config", "--get", "remote.origin.url"], { encoding: "utf8" }).stdout ?? "";
     console.log("\n" + checklist(options, githubRepo(remote)));
+  });
+
+program
+  .command("setup-github")
+  .description("Set up the GitHub side for this repo with the gh CLI: variable, secrets, environments, ruleset")
+  .option("--repo <owner/name>", "GitHub repository (default: this folder's origin remote)")
+  .option("-p, --project <id-or-name>", "Flagsmith project")
+  .option("--reviewer <login>", "GitHub user who may approve production (repeat for more)", collect)
+  .option("--approvals <n>", "approvals a pull request to main needs", "1")
+  .option("--create-keys", "create the read-only server-side keys in Flagsmith (otherwise FLAGSMITH_ENVIRONMENT_KEYS is used)")
+  .option("-y, --yes", "don't ask for confirmation")
+  .action(async (opts: { repo?: string; project?: string; reviewer?: string[]; approvals: string; createKeys?: boolean; yes?: boolean }) => {
+    const approvals = Number(opts.approvals);
+    if (!Number.isInteger(approvals) || approvals < 0 || approvals > 6) throw new Error("--approvals must be a whole number from 0 to 6");
+    if (realGh(["auth", "status"]).status !== 0) throw new Error("The GitHub CLI isn't installed or logged in. Install it from https://cli.github.com, then run: gh auth login");
+    const remote = spawnSync("git", ["config", "--get", "remote.origin.url"], { encoding: "utf8" }).stdout ?? "";
+    const repo = opts.repo ?? githubRepo(remote);
+    if (!repo || !/^[^/\s]+\/[^/\s]+$/.test(repo)) throw new Error("Couldn't tell which GitHub repository to set up. Use --repo owner/name.");
+
+    const { apiUrl, adminKey } = getConfig();
+    let environmentKeys = getEnvironmentKeys();
+    const fs = client();
+    if (opts.createKeys) {
+      const project = await resolveProject(fs, opts.project);
+      environmentKeys = [];
+      for (const env of await fs.listEnvironments(project.id)) environmentKeys.push(await fs.createServerKey(env.api_key, "flagops-ci"));
+      console.log(`Created ${environmentKeys.length} read-only server-side keys in Flagsmith (named "flagops-ci").`);
+    } else if (environmentKeys.length === 0) {
+      throw new Error("No read-only keys: set FLAGSMITH_ENVIRONMENT_KEYS, or add --create-keys to create them in Flagsmith.");
+    }
+    if (/\/\/(localhost|127\.|\[::1\])/.test(apiUrl)) {
+      console.log(`Note: ${apiUrl} is only reachable from this machine. GitHub's own runners need a public address, or use a self-hosted runner.`);
+    }
+
+    const reviewers = opts.reviewer ?? [];
+    const me = realGh(["api", "user", "--jq", ".login"]).stdout.trim();
+    if (reviewers.length === 0) console.log("Note: no --reviewer given, so production won't wait for an approval.");
+    if (reviewers.length === 1 && reviewers[0].toLowerCase() === me.toLowerCase()) {
+      console.log("Note: you're the only reviewer, and self-review is blocked, so you can't approve your own production changes. Add a teammate with --reviewer.");
+    }
+
+    const blockAdminBypass = reviewers.some((r) => r.toLowerCase() !== me.toLowerCase());
+    const steps = planSetup(realGh, { repo, apiUrl, adminKey, environmentKeys, reviewers, approvals, blockAdminBypass });
+    console.log(`\nPlan for ${repo}:`);
+    for (const step of steps) console.log(`  - ${step.title}`);
+    if (!opts.yes) {
+      if (!process.stdin.isTTY) throw new Error("Not asking for confirmation without a terminal. Use --yes.");
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await rl.question("\nMake these changes? (y/n) ");
+      rl.close();
+      if (answer.trim().toLowerCase() !== "y") {
+        console.log("Nothing changed.");
+        return;
+      }
+    }
+    console.log("");
+    const result = runSetup(steps, (line) => console.log(line));
+    if (result.failed) {
+      console.error(`\nStopped after ${result.done} of ${steps.length} steps. Fix the cause and run it again; finished steps are safe to repeat.`);
+      process.exit(1);
+    }
+    console.log(
+      `\nDone. Still to do by hand: add a CODEOWNERS file (for example "/.github/ @your-team")` +
+        (blockAdminBypass ? "" : ', turn off "Allow administrators to bypass" on the production environment once a teammate can approve') +
+        ", then run flagops pull and commit the flag files.",
+    );
   });
 
 program
@@ -154,7 +221,9 @@ program
     }
   });
 
-const collect = (value: string, previous: string[] = []) => [...previous, value];
+function collect(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
 
 // plan and drift only read flags: with FLAGSMITH_ENVIRONMENT_KEYS set they use those read-only
 // server-side keys and never touch the admin key. Everything else needs the admin key.

@@ -11080,6 +11080,14 @@ var FlagsmithClient = class {
     const states = await this.getAll(`/environments/${envApiKey}/featurestates/?feature=${featureId}`);
     return states.find((s) => s.feature === featureId && s.identity === null && s.feature_segment === null);
   }
+  // A read-only server-side key for one environment (what plan and drift use in CI).
+  async createServerKey(envApiKey, name) {
+    const created = await this.request(`${this.apiUrl}/environments/${envApiKey}/api-keys/`, {
+      method: "POST",
+      body: JSON.stringify({ name })
+    });
+    return created.key;
+  }
   // --- Segment overrides. Checked against Flagsmith 2.295.
   listSegments(projectId) {
     return this.getAll(`/projects/${projectId}/segments/`);
@@ -30642,7 +30650,7 @@ function visit(schema, fnOrHandlers) {
     return h ? h(node2, rewritten) : node2;
   };
   const cache = /* @__PURE__ */ new Map();
-  function run(s) {
+  function run2(s) {
     const cached2 = cache.get(s);
     if (cached2 === RESOLVING) {
       return new $ZodLazy({
@@ -30668,21 +30676,21 @@ function visit(schema, fnOrHandlers) {
         let changed = false;
         const newShape = {};
         for (const k of keys) {
-          const mapped = run(oldShape[k]);
+          const mapped = run2(oldShape[k]);
           if (mapped !== oldShape[k])
             changed = true;
           newShape[k] = mapped;
         }
         let newCatchall = def.catchall;
         if (def.catchall) {
-          newCatchall = run(def.catchall);
+          newCatchall = run2(def.catchall);
           if (newCatchall !== def.catchall)
             changed = true;
         }
         return changed ? clone(s, { ...def, shape: newShape, catchall: newCatchall }) : s;
       }
       case "array": {
-        const mapped = run(def.element);
+        const mapped = run2(def.element);
         return mapped === def.element ? s : clone(s, { ...def, element: mapped });
       }
       case "tuple": {
@@ -30690,14 +30698,14 @@ function visit(schema, fnOrHandlers) {
         let changed = false;
         const newItems = [];
         for (const item of oldItems) {
-          const mapped = run(item);
+          const mapped = run2(item);
           if (mapped !== item)
             changed = true;
           newItems.push(mapped);
         }
         let newRest = def.rest;
         if (def.rest) {
-          newRest = run(def.rest);
+          newRest = run2(def.rest);
           if (newRest !== def.rest)
             changed = true;
         }
@@ -30705,12 +30713,12 @@ function visit(schema, fnOrHandlers) {
       }
       case "record":
       case "map": {
-        const newKey = run(def.keyType);
-        const newVal = run(def.valueType);
+        const newKey = run2(def.keyType);
+        const newVal = run2(def.valueType);
         return newKey === def.keyType && newVal === def.valueType ? s : clone(s, { ...def, keyType: newKey, valueType: newVal });
       }
       case "set": {
-        const newVal = run(def.valueType);
+        const newVal = run2(def.valueType);
         return newVal === def.valueType ? s : clone(s, { ...def, valueType: newVal });
       }
       case "union": {
@@ -30718,7 +30726,7 @@ function visit(schema, fnOrHandlers) {
         let changed = false;
         const newOptions = [];
         for (const opt of oldOptions) {
-          const mapped = run(opt);
+          const mapped = run2(opt);
           if (mapped !== opt)
             changed = true;
           newOptions.push(mapped);
@@ -30726,8 +30734,8 @@ function visit(schema, fnOrHandlers) {
         return changed ? clone(s, { ...def, options: newOptions }) : s;
       }
       case "intersection": {
-        const newLeft = run(def.left);
-        const newRight = run(def.right);
+        const newLeft = run2(def.left);
+        const newRight = run2(def.right);
         return newLeft === def.left && newRight === def.right ? s : clone(s, { ...def, left: newLeft, right: newRight });
       }
       case "optional":
@@ -30739,23 +30747,23 @@ function visit(schema, fnOrHandlers) {
       case "nonoptional":
       case "promise":
       case "success": {
-        const newInner = run(def.innerType);
+        const newInner = run2(def.innerType);
         return newInner === def.innerType ? s : clone(s, { ...def, innerType: newInner });
       }
       case "pipe": {
-        const newIn = run(def.in);
-        const newOut = run(def.out);
+        const newIn = run2(def.in);
+        const newOut = run2(def.out);
         return newIn === def.in && newOut === def.out ? s : clone(s, { ...def, in: newIn, out: newOut });
       }
       case "function": {
-        const newInput = run(def.input);
-        const newOutput = run(def.output);
+        const newInput = run2(def.input);
+        const newOutput = run2(def.output);
         return newInput === def.input && newOutput === def.output ? s : clone(s, { ...def, input: newInput, output: newOutput });
       }
       case "lazy": {
         const original = def.getter;
         const { _cachedInner, ...rest } = def;
-        return clone(s, { ...rest, getter: () => run(original()) });
+        return clone(s, { ...rest, getter: () => run2(original()) });
       }
       // A leaf by choice: `parts` are regex fragments, not data positions.
       case "template_literal":
@@ -30786,7 +30794,7 @@ function visit(schema, fnOrHandlers) {
       }
     }
   }
-  return run(schema);
+  return run2(schema);
 }
 
 // node_modules/zod/v4/classic/deep-partial.js
@@ -31790,8 +31798,132 @@ function checklist(opts, repo) {
   ].join("\n");
 }
 
-// src/cli.ts
+// src/setup.ts
 var import_node_child_process2 = require("node:child_process");
+var realGh = (args, input2) => {
+  const r = (0, import_node_child_process2.spawnSync)("gh", args, { input: input2, encoding: "utf8" });
+  return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: (r.stderr ?? "") + (r.error ? r.error.message : "") };
+};
+var RULESET_NAME = "FlagOps: protect main";
+var SetupError = class extends Error {
+};
+function explain(path6, output2) {
+  if (/HTTP 404/.test(output2) && path6.includes("/environments")) {
+    return "GitHub refused environments on this repository. In private repositories they need GitHub Pro, Team or Enterprise; on GitHub Free, make the repository public.";
+  }
+  if (/billing plan/i.test(output2)) {
+    return "GitHub's plan for this repository doesn't allow required reviewers (in private repositories they need GitHub Enterprise). Make the repository public, or run again without --reviewer to set up everything else.";
+  }
+  if (/HTTP 403|Resource not accessible|Must have admin rights/i.test(output2)) {
+    return "you need admin rights on the repository (and a gh login with the repo scope: gh auth refresh -s repo).";
+  }
+  return output2.trim().split("\n")[0] || "no details from gh";
+}
+function api(gh, method, path6, body) {
+  const args = ["api", "-X", method, "-H", "Accept: application/vnd.github+json", path6];
+  if (body !== void 0) args.push("--input", "-");
+  const r = gh(args, body === void 0 ? void 0 : JSON.stringify(body));
+  if (r.status !== 0) throw new SetupError(`${method} ${path6}: ${explain(path6, r.stderr + r.stdout)}`);
+  return r.stdout.trim() ? JSON.parse(r.stdout) : void 0;
+}
+function run(gh, args, input2) {
+  const r = gh(args, input2);
+  if (r.status !== 0) throw new SetupError(`gh ${args.slice(0, 3).join(" ")}: ${explain("", r.stderr + r.stdout)}`);
+}
+function environment(gh, repo, name, reviewerIds, blockAdminBypass = false) {
+  const body = {
+    deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
+  };
+  if (blockAdminBypass) body.can_admins_bypass = false;
+  if (reviewerIds.length > 0) {
+    body.reviewers = reviewerIds.map((id) => ({ type: "User", id }));
+    body.prevent_self_review = true;
+  }
+  api(gh, "PUT", `repos/${repo}/environments/${name}`, body);
+  const policies = api(gh, "GET", `repos/${repo}/environments/${name}/deployment-branch-policies`);
+  if (!policies.branch_policies.some((p) => p.name === "main")) {
+    api(gh, "POST", `repos/${repo}/environments/${name}/deployment-branch-policies`, { name: "main", type: "branch" });
+  }
+}
+function rulesetBody(approvals) {
+  return {
+    name: RULESET_NAME,
+    target: "branch",
+    enforcement: "active",
+    conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+    rules: [
+      { type: "deletion" },
+      { type: "non_fast_forward" },
+      {
+        type: "pull_request",
+        parameters: {
+          required_approving_review_count: approvals,
+          dismiss_stale_reviews_on_push: true,
+          require_code_owner_review: true,
+          require_last_push_approval: false,
+          required_review_thread_resolution: false
+        }
+      },
+      {
+        type: "required_status_checks",
+        parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: "validate" }] }
+      }
+    ]
+  };
+}
+function planSetup(gh, o) {
+  const reviewerIds = () => o.reviewers.map((login) => api(gh, "GET", `users/${login}`).id);
+  return [
+    {
+      title: `Variable FLAGSMITH_API_URL = ${o.apiUrl}`,
+      run: () => run(gh, ["variable", "set", "FLAGSMITH_API_URL", "--repo", o.repo, "--body", o.apiUrl])
+    },
+    {
+      title: `Secret FLAGSMITH_ENVIRONMENT_KEYS (${o.environmentKeys.length} read-only key${o.environmentKeys.length === 1 ? "" : "s"}, for plan and drift)`,
+      run: () => run(gh, ["secret", "set", "FLAGSMITH_ENVIRONMENT_KEYS", "--repo", o.repo], o.environmentKeys.join(" "))
+    },
+    {
+      title: `Environment "non-production": deployments from main only, secret FLAGSMITH_ADMIN_KEY`,
+      run: () => {
+        environment(gh, o.repo, "non-production", []);
+        run(gh, ["secret", "set", "FLAGSMITH_ADMIN_KEY", "--env", "non-production", "--repo", o.repo], o.adminKey);
+      }
+    },
+    {
+      title: `Environment "production": deployments from main only, secret FLAGSMITH_ADMIN_KEY` + (o.reviewers.length > 0 ? `, required reviewers ${o.reviewers.join(", ")}, self-review blocked` : ", no reviewers (add --reviewer)") + (o.blockAdminBypass ? ", no admin bypass" : ""),
+      run: () => {
+        environment(gh, o.repo, "production", reviewerIds(), o.blockAdminBypass);
+        run(gh, ["secret", "set", "FLAGSMITH_ADMIN_KEY", "--env", "production", "--repo", o.repo], o.adminKey);
+      }
+    },
+    {
+      title: `Ruleset "${RULESET_NAME}": pull requests with ${o.approvals} approval${o.approvals === 1 ? "" : "s"} and code owner review, the "validate" check, no force-push or deletion`,
+      run: () => {
+        const existing = api(gh, "GET", `repos/${o.repo}/rulesets`).find((r) => r.name === RULESET_NAME);
+        if (existing) api(gh, "PUT", `repos/${o.repo}/rulesets/${existing.id}`, rulesetBody(o.approvals));
+        else api(gh, "POST", `repos/${o.repo}/rulesets`, rulesetBody(o.approvals));
+      }
+    }
+  ];
+}
+function runSetup(steps, log) {
+  let done = 0;
+  for (const step of steps) {
+    try {
+      step.run();
+      log(`  done   ${step.title}`);
+      done++;
+    } catch (err) {
+      log(`  FAILED ${step.title}
+         ${err.message}`);
+      return { done, failed: err.message };
+    }
+  }
+  return { done };
+}
+
+// src/cli.ts
+var import_node_child_process3 = require("node:child_process");
 for (const method of ["log", "error"]) {
   const write = console[method];
   console[method] = (...args) => write(...args.map((a) => typeof a === "string" ? guardOutput(a) : a));
@@ -31821,8 +31953,62 @@ program2.command("init").description("Add the FlagOps GitHub workflows to this r
   const { written, kept } = await writeWorkflows(".", import_node_path5.default.resolve(__dirname, "..", "examples", "workflows"), options);
   for (const name of written) console.log(`  wrote .github/workflows/${name}`);
   for (const name of kept) console.log(`  kept  .github/workflows/${name} (already there; --force overwrites it)`);
-  const remote = (0, import_node_child_process2.spawnSync)("git", ["config", "--get", "remote.origin.url"], { encoding: "utf8" }).stdout ?? "";
+  const remote = (0, import_node_child_process3.spawnSync)("git", ["config", "--get", "remote.origin.url"], { encoding: "utf8" }).stdout ?? "";
   console.log("\n" + checklist(options, githubRepo(remote)));
+});
+program2.command("setup-github").description("Set up the GitHub side for this repo with the gh CLI: variable, secrets, environments, ruleset").option("--repo <owner/name>", "GitHub repository (default: this folder's origin remote)").option("-p, --project <id-or-name>", "Flagsmith project").option("--reviewer <login>", "GitHub user who may approve production (repeat for more)", collect).option("--approvals <n>", "approvals a pull request to main needs", "1").option("--create-keys", "create the read-only server-side keys in Flagsmith (otherwise FLAGSMITH_ENVIRONMENT_KEYS is used)").option("-y, --yes", "don't ask for confirmation").action(async (opts) => {
+  const approvals = Number(opts.approvals);
+  if (!Number.isInteger(approvals) || approvals < 0 || approvals > 6) throw new Error("--approvals must be a whole number from 0 to 6");
+  if (realGh(["auth", "status"]).status !== 0) throw new Error("The GitHub CLI isn't installed or logged in. Install it from https://cli.github.com, then run: gh auth login");
+  const remote = (0, import_node_child_process3.spawnSync)("git", ["config", "--get", "remote.origin.url"], { encoding: "utf8" }).stdout ?? "";
+  const repo = opts.repo ?? githubRepo(remote);
+  if (!repo || !/^[^/\s]+\/[^/\s]+$/.test(repo)) throw new Error("Couldn't tell which GitHub repository to set up. Use --repo owner/name.");
+  const { apiUrl, adminKey } = getConfig();
+  let environmentKeys = getEnvironmentKeys();
+  const fs2 = client();
+  if (opts.createKeys) {
+    const project = await resolveProject(fs2, opts.project);
+    environmentKeys = [];
+    for (const env of await fs2.listEnvironments(project.id)) environmentKeys.push(await fs2.createServerKey(env.api_key, "flagops-ci"));
+    console.log(`Created ${environmentKeys.length} read-only server-side keys in Flagsmith (named "flagops-ci").`);
+  } else if (environmentKeys.length === 0) {
+    throw new Error("No read-only keys: set FLAGSMITH_ENVIRONMENT_KEYS, or add --create-keys to create them in Flagsmith.");
+  }
+  if (/\/\/(localhost|127\.|\[::1\])/.test(apiUrl)) {
+    console.log(`Note: ${apiUrl} is only reachable from this machine. GitHub's own runners need a public address, or use a self-hosted runner.`);
+  }
+  const reviewers = opts.reviewer ?? [];
+  const me = realGh(["api", "user", "--jq", ".login"]).stdout.trim();
+  if (reviewers.length === 0) console.log("Note: no --reviewer given, so production won't wait for an approval.");
+  if (reviewers.length === 1 && reviewers[0].toLowerCase() === me.toLowerCase()) {
+    console.log("Note: you're the only reviewer, and self-review is blocked, so you can't approve your own production changes. Add a teammate with --reviewer.");
+  }
+  const blockAdminBypass = reviewers.some((r) => r.toLowerCase() !== me.toLowerCase());
+  const steps = planSetup(realGh, { repo, apiUrl, adminKey, environmentKeys, reviewers, approvals, blockAdminBypass });
+  console.log(`
+Plan for ${repo}:`);
+  for (const step of steps) console.log(`  - ${step.title}`);
+  if (!opts.yes) {
+    if (!process.stdin.isTTY) throw new Error("Not asking for confirmation without a terminal. Use --yes.");
+    const rl = (0, import_promises5.createInterface)({ input: process.stdin, output: process.stdout });
+    const answer = await rl.question("\nMake these changes? (y/n) ");
+    rl.close();
+    if (answer.trim().toLowerCase() !== "y") {
+      console.log("Nothing changed.");
+      return;
+    }
+  }
+  console.log("");
+  const result = runSetup(steps, (line) => console.log(line));
+  if (result.failed) {
+    console.error(`
+Stopped after ${result.done} of ${steps.length} steps. Fix the cause and run it again; finished steps are safe to repeat.`);
+    process.exit(1);
+  }
+  console.log(
+    `
+Done. Still to do by hand: add a CODEOWNERS file (for example "/.github/ @your-team")` + (blockAdminBypass ? "" : ', turn off "Allow administrators to bypass" on the production environment once a teammate can approve') + ", then run flagops pull and commit the flag files."
+  );
 });
 program2.command("check").description("Check the connection to Flagsmith").action(async () => {
   const projects = await client().listProjects();
@@ -31884,7 +32070,9 @@ program2.command("pull").description("Export each environment's flags to <dir>/<
     console.error(`  ${JSON.stringify(name)}: segment overrides left out (${reason}); the flag's own settings were written, and its overrides stay unmanaged until that is fixed.`);
   }
 });
-var collect = (value, previous = []) => [...previous, value];
+function collect(value, previous = []) {
+  return [...previous, value];
+}
 async function readSource(project) {
   const keys = getEnvironmentKeys();
   if (keys.length > 0) return keySource(getApiUrl(), keys);
