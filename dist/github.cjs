@@ -7367,6 +7367,7 @@ var require_dist = __commonJS({
 // src/github.ts
 var github_exports = {};
 __export(github_exports, {
+  DEFAULT_BOT: () => DEFAULT_BOT,
   fitBody: () => fitBody,
   postPlan: () => postPlan,
   syncDriftIssue: () => syncDriftIssue
@@ -27179,13 +27180,14 @@ function fitBody(body, context) {
 **Cut short:** the full report is in the [run summary](${summary}).
 `;
 }
-var ours = (item, marker) => item.user?.type === "Bot" && Boolean(item.body?.startsWith(marker));
-async function postPlan(github, context, file2) {
+var DEFAULT_BOT = "github-actions[bot]";
+var ours = (item, marker, bot) => item.user?.type === "Bot" && item.user?.login === bot && Boolean(item.body?.startsWith(marker));
+async function postPlan(github, context, file2, bot = DEFAULT_BOT) {
   const body = fitBody((0, import_node_fs.readFileSync)(file2, "utf8"), context);
   const { owner, repo } = context.repo;
   const issue_number = context.issue.number;
   const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
-  const mine = comments.find((c) => ours(c, COMMENT_MARKER));
+  const mine = comments.find((c) => ours(c, COMMENT_MARKER, bot));
   if (mine) {
     await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
     return "updated";
@@ -27193,11 +27195,11 @@ async function postPlan(github, context, file2) {
   await github.rest.issues.createComment({ owner, repo, issue_number, body });
   return "created";
 }
-async function syncDriftIssue(github, context, log, file2, drift, failed = false) {
+async function syncDriftIssue(github, context, log, file2, drift, failed = false, bot = DEFAULT_BOT) {
   const body = fitBody((0, import_node_fs.readFileSync)(file2, "utf8"), context);
   const { owner, repo } = context.repo;
   const open2 = await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: "open", per_page: 100 });
-  const existing = open2.find((i) => !i.pull_request && ours(i, DRIFT_MARKER));
+  const existing = open2.find((i) => !i.pull_request && ours(i, DRIFT_MARKER, bot));
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
   if (failed && existing) {
     await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body: `The latest drift check failed ([run](${runUrl})):
@@ -27232,6 +27234,7 @@ ${body.split("\n").slice(1).join("\n")}` });
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  DEFAULT_BOT,
   fitBody,
   postPlan,
   syncDriftIssue

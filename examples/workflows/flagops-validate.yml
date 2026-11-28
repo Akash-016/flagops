@@ -17,6 +17,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       # No admin key in this job, so the moving v1 tag (fixes arrive automatically) is a fair

@@ -37,7 +37,8 @@ function fake(items: object[]) {
   return { github, calls };
 }
 
-const bot = { type: "Bot" };
+const bot = { type: "Bot", login: "github-actions[bot]" };
+const otherBot = { type: "Bot", login: "renovate[bot]" };
 const person = { type: "User" };
 
 describe("plan comment", () => {
@@ -49,6 +50,14 @@ describe("plan comment", () => {
     const later = fake([{ id: 9, user: bot, body: `${COMMENT_MARKER}\nold` }]);
     expect(await postPlan(later.github, context, file(`${COMMENT_MARKER}\nnew`))).toBe("updated");
     expect(later.calls).toEqual([["updateComment", { owner: "o", repo: "r", comment_id: 9, body: `${COMMENT_MARKER}\nnew` }]]);
+  });
+
+  it("ignores another bot's comment that starts with the marker, but follows bot-login", async () => {
+    const { github, calls } = fake([{ id: 9, user: otherBot, body: `${COMMENT_MARKER}\nnot ours` }]);
+    expect(await postPlan(github, context, file(`${COMMENT_MARKER}\nplan`))).toBe("created");
+    expect(calls[0][0]).toBe("createComment");
+    const app = fake([{ id: 9, user: otherBot, body: `${COMMENT_MARKER}\nold` }]);
+    expect(await postPlan(app.github, context, file(`${COMMENT_MARKER}\nplan`), "renovate[bot]")).toBe("updated");
   });
 
   it("ignores a person's comment that starts with the marker", async () => {

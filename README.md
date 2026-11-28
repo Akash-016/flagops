@@ -69,21 +69,21 @@ npm run seed
 **4. Export your flags to YAML**
 
 ```bash
-npx github:Akash-016/flagops pull
+npx github:Akash-016/flagops#v1 pull
 ```
 
 This writes `flags/development.yaml`, `flags/staging.yaml` and `flags/production.yaml`. Edit one, then:
 
 ```bash
-npx github:Akash-016/flagops plan     # what would change
-npx github:Akash-016/flagops apply    # make the change (asks first)
+npx github:Akash-016/flagops#v1 plan     # what would change
+npx github:Akash-016/flagops#v1 apply    # make the change (asks first)
 ```
 
 **5. Set up the GitHub Action for your team** (about 20 minutes) in the repo that holds your `flags/` folder
 
 ```bash
-npx github:Akash-016/flagops init                         # writes the four workflows into .github/workflows/
-npx github:Akash-016/flagops init --production "Prod EU"  # if production has another name (or --dir for another folder)
+npx github:Akash-016/flagops#v1 init                         # writes the four workflows into .github/workflows/
+npx github:Akash-016/flagops#v1 init --production "Prod EU"  # if production has another name (or --dir for another folder)
 ```
 
 `init` writes the [example workflows](examples/workflows), adjusted to your folder and production name, and prints the steps below with links to your repository's settings pages.
@@ -91,7 +91,7 @@ npx github:Akash-016/flagops init --production "Prod EU"  # if production has an
 **Or let FlagOps do the GitHub settings** with the [GitHub CLI](https://cli.github.com) (`gh auth login` first, with admin rights on the repo):
 
 ```bash
-npx github:Akash-016/flagops setup-github --create-keys --reviewer your-teammate
+npx github:Akash-016/flagops#v1 setup-github --create-keys --reviewer your-teammate
 ```
 
 It shows its plan and asks before changing anything. It creates the read-only keys in Flagsmith (`--create-keys`), then sets the variable, both secrets, both environments limited to `main`, the production reviewers with self-review blocked, and the ruleset on `main`. Running it again updates the same settings instead of adding copies. It turns off admin bypass only when someone other than you can approve, so a single maintainer is never locked out of Production. Left for you: a `CODEOWNERS` file and the first `flagops pull`.

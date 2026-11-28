@@ -53,6 +53,10 @@ inputs:
     description: "For drift: open an issue when drift is found, and close it once fixed (true/false)"
     required: false
     default: "true"
+  bot-login:
+    description: "The login github-token posts as, so FlagOps finds its own comment and issue: github-actions[bot] for GITHUB_TOKEN, <app-name>[bot] for a GitHub App token"
+    required: false
+    default: "github-actions[bot]"
   github-token:
     description: "Token used to post the pull request comment or drift issue. Use the default GITHUB_TOKEN or a GitHub App token: FlagOps finds its own comment and issue by their bot author, so a personal access token would add a new one on every run"
     required: false
@@ -93,15 +97,16 @@ runs:
         require(require("node:path").join(process.env.GITHUB_ACTION_PATH, "dist", "action.cjs"));
 
     - name: Post plan on the pull request
-      if: inputs.command == 'plan' && inputs.comment == 'true' && github.event_name == 'pull_request'
+      if: always() && inputs.command == 'plan' && inputs.comment == 'true' && github.event_name == 'pull_request' && steps.run.outputs.report-file != ''
       uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
       env:
         PLAN_FILE: ${{ steps.run.outputs.report-file }}
+        BOT_LOGIN: ${{ inputs.bot-login }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
           const steps = require(require("path").join(process.env.GITHUB_ACTION_PATH, "dist", "github.cjs"));
-          const result = await steps.postPlan(github, context, process.env.PLAN_FILE);
+          const result = await steps.postPlan(github, context, process.env.PLAN_FILE, process.env.BOT_LOGIN);
           core.info(`Plan comment ${result}.`);
           core.setOutput("comment", result);
 
@@ -112,8 +117,9 @@ runs:
         REPORT_FILE: ${{ steps.run.outputs.report-file }}
         DRIFT: ${{ steps.run.outputs.drift }}
         FAILED: ${{ steps.run.outputs.failed }}
+        BOT_LOGIN: ${{ inputs.bot-login }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
           const steps = require(require("path").join(process.env.GITHUB_ACTION_PATH, "dist", "github.cjs"));
-          await steps.syncDriftIssue(github, context, core, process.env.REPORT_FILE, process.env.DRIFT === "true", process.env.FAILED === "true");
+          await steps.syncDriftIssue(github, context, core, process.env.REPORT_FILE, process.env.DRIFT === "true", process.env.FAILED === "true", process.env.BOT_LOGIN);

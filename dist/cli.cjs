@@ -31178,7 +31178,15 @@ function sortByEnvironment(plans) {
     (a, b) => environmentRank(a.environment) - environmentRank(b.environment) || a.environment.localeCompare(b.environment)
   );
 }
-var show = (v) => v === null ? "null" : JSON.stringify(v);
+var SHOW_MAX = 120;
+var show = (v) => {
+  if (v === null) return "null";
+  if (typeof v === "string" && [...v].length > SHOW_MAX) {
+    const chars = [...v];
+    return `${JSON.stringify(chars.slice(0, SHOW_MAX).join(""))}... (${chars.length} characters)`;
+  }
+  return JSON.stringify(v);
+};
 var safe = (s) => /[\x00-\x1f\x7f\x85\u2028\u2029]/.test(s) ? JSON.stringify(s) : s;
 var guardOutput = (s) => s.replace(/\r(?!\n)/g, "\\r").replace(/^(\s*)::/gm, "$1: :").replace(/##\[/g, "## [");
 var setting = (s) => `${s.enabled ? "on" : "off"}, value ${show(s.value)}`;
