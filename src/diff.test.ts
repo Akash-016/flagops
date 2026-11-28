@@ -50,6 +50,15 @@ describe("diffEnvironment", () => {
     expect(plan.changes).toEqual([{ kind: "create", flag: "b", after: { enabled: false, value: null } }]);
   });
 
+  it("handles flags named like built-in object properties", () => {
+    const plan = diffEnvironment(wanted({ toString: { enabled: true, value: null } }), live({ constructor: [true, null], hasOwnProperty: [false, null] }));
+    expect(plan.changes.map((c) => [c.kind, c.flag])).toEqual([
+      ["untracked", "constructor"],
+      ["untracked", "hasOwnProperty"],
+      ["create", "toString"],
+    ]);
+  });
+
   it("marks flags missing from YAML as untracked, not deleted", () => {
     const plan = diffEnvironment(wanted({}), live({ old: [true, null] }));
     expect(plan.changes).toEqual([{ kind: "untracked", flag: "old", before: { enabled: true, value: null } }]);

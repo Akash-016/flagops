@@ -10972,7 +10972,8 @@ function toTyped(v) {
   if (typeof v === "boolean") return { type: "bool", boolean_value: v };
   return { type: "unicode", string_value: v };
 }
-var TIMEOUT_MS = (Number(process.env.FLAGSMITH_TIMEOUT) || 30) * 1e3;
+var timeoutSetting = Number(process.env.FLAGSMITH_TIMEOUT);
+var TIMEOUT_MS = (Number.isFinite(timeoutSetting) && timeoutSetting >= 1 && timeoutSetting <= 3600 ? timeoutSetting : 30) * 1e3;
 async function fetchWithRetry(url2, init) {
   const method = init.method ?? "GET";
   for (let attempt = 1; ; attempt++) {
@@ -30902,16 +30903,19 @@ var flagSchema = external_exports.strictObject({
 var isArchived = (f) => f.archived === true;
 var BAD_NAME = /[\x00-\x1f\x7f]/;
 var BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+var INVISIBLE = /[\u00ad\u200b-\u200d\u2060\ufeff]/;
 function nameProblem(name) {
   if (name === "" || BAD_NAME.test(name)) return "flag names can't be empty or contain control characters";
   if (BIDI.test(name)) return "flag names can't contain text-direction characters (they can make one name look like another)";
+  if (INVISIBLE.test(name)) return "flag names can't contain invisible characters (they can make one name look like another)";
+  if (name === "__proto__") return "a flag can't be named __proto__ (a JavaScript object can't hold that key)";
   if (EDGE_SPACE.test(name)) return "Flagsmith trims leading and trailing spaces from flag names; remove them";
   if ([...name].length > MAX_NAME) return `flag names can be at most ${MAX_NAME} characters`;
   return void 0;
 }
 var flagFileSchema = external_exports.strictObject({
   environment: external_exports.string().min(1),
-  flags: external_exports.record(external_exports.string(), flagSchema).default({}).superRefine((flags, ctx) => {
+  flags: external_exports.preprocess((v) => v === null ? {} : v, external_exports.record(external_exports.string(), flagSchema)).default({}).superRefine((flags, ctx) => {
     const seen = /* @__PURE__ */ new Map();
     for (const name of Object.keys(flags)) {
       const problem = nameProblem(name);
@@ -30930,7 +30934,7 @@ function buildFlagFile(environmentName, features, states, overrides, segmentCoun
   const flags = {};
   for (const f of [...features].sort((a, b) => a.name.localeCompare(b.name))) {
     const state = stateByFeature.get(f.id);
-    if (!state) continue;
+    if (!state || f.name === "__proto__") continue;
     const entry = { enabled: state.enabled, value: state.feature_state_value ?? null };
     const list = overrides?.get(f.name) ?? [];
     const unclear = list.find((o) => (segmentCount?.get(o.segment) ?? 1) !== 1);
@@ -30951,7 +30955,12 @@ function parseFlagFile(text2, source) {
   try {
     data = import_yaml.default.parse(text2);
   } catch (err) {
-    throw new Error(`${source} is not valid YAML: ${err.message}`);
+    throw new Error(`${source} is not valid YAML: ${err.message.split("\n")[0]}`);
+  }
+  const rawFlags = data?.flags;
+  if (rawFlags && typeof rawFlags === "object" && Object.hasOwn(rawFlags, "__proto__")) {
+    throw new Error(`${source} is not a valid flag file:
+  flags.__proto__: a flag can't be named __proto__ (a JavaScript object can't hold that key)`);
   }
   const result = flagFileSchema.safeParse(data);
   if (!result.success) {
@@ -31104,7 +31113,7 @@ function diffEnvironment(wanted, live, archivedLive, segmentCount) {
     if (entry.segments && (current || !isArchived(entry))) changes.push(...diffOverrides(flag, entry, current, segmentCount));
   }
   for (const [flag, current] of live) {
-    if (!(flag in wanted.flags) && !nameProblem(flag)) {
+    if (!Object.hasOwn(wanted.flags, flag) && !nameProblem(flag)) {
       changes.push({ kind: "untracked", flag, before: { enabled: current.enabled, value: current.value } });
     }
   }
@@ -31453,7 +31462,7 @@ function checkSameFlags(files) {
   const all = new Set(files.flatMap((f) => Object.keys(f.file.flags)));
   const problems = [];
   for (const flag of [...all].sort()) {
-    const missing = files.filter((f) => !(flag in f.file.flags)).map((f) => f.source);
+    const missing = files.filter((f) => !Object.hasOwn(f.file.flags, flag)).map((f) => f.source);
     if (missing.length === 0) {
       const archivedIn = files.filter((f) => isArchived(f.file.flags[flag])).map((f) => f.source);
       if (archivedIn.length > 0 && archivedIn.length < files.length) {
@@ -31461,7 +31470,7 @@ function checkSameFlags(files) {
       }
       continue;
     }
-    const present = files.filter((f) => flag in f.file.flags).map((f) => f.source);
+    const present = files.filter((f) => Object.hasOwn(f.file.flags, flag)).map((f) => f.source);
     problems.push(
       `"${flag}" is in ${present.join(", ")} but missing from ${missing.join(", ")}. Flagsmith creates a flag in every environment, so add it there too (enabled: false to keep it off).`
     );
@@ -31490,6 +31499,9 @@ async function readNamedFlagFiles(dir) {
   const files = [];
   const seen = /* @__PURE__ */ new Map();
   for (const name of names) {
+    if ((await (0, import_promises2.lstat)(import_node_path3.default.join(dir, name))).isSymbolicLink()) {
+      throw new Error(`${name} is a symbolic link. Flag files must be regular files in "${dir}".`);
+    }
     const file2 = parseFlagFile(await (0, import_promises2.readFile)(import_node_path3.default.join(dir, name), "utf8"), name);
     const key = file2.environment.toLowerCase();
     if (seen.has(key)) {
@@ -31578,7 +31590,7 @@ async function keySource(apiUrl, keys) {
     segmentNames: async () => (docs[0]?.project.segments ?? []).map((s) => s.name)
   };
 }
-async function buildPlans(source, dir, onlyEnvs) {
+async function buildPlans(source, dir, onlyEnvs, skipEnvs) {
   const [allFiles, environments] = await Promise.all([readFlagFiles(dir), source.listEnvironments()]);
   let files = allFiles;
   if (onlyEnvs && onlyEnvs.length > 0) {
@@ -31586,6 +31598,12 @@ async function buildPlans(source, dir, onlyEnvs) {
     files = allFiles.filter((f) => wanted.includes(f.environment.toLowerCase()));
     const missing = wanted.filter((w) => !files.some((f) => f.environment.toLowerCase() === w));
     if (missing.length > 0) throw new Error(`No flag file for environment(s): ${missing.join(", ")}`);
+  }
+  if (skipEnvs && skipEnvs.length > 0) {
+    const skip = skipEnvs.map((e) => e.toLowerCase());
+    const unknown2 = skip.filter((w) => !allFiles.some((f) => f.environment.toLowerCase() === w));
+    if (unknown2.length > 0) throw new Error(`No flag file for environment(s) to skip: ${unknown2.join(", ")}`);
+    files = files.filter((f) => !skip.includes(f.environment.toLowerCase()));
   }
   const archivedNames = await source.archived?.();
   const archived = archivedNames && new Set(archivedNames.map((n) => n.toLowerCase()));
@@ -31763,6 +31781,7 @@ program2.command("pull").description("Export each environment's flags to <dir>/<
     files.push({ target, file: buildFlagFile(env.name, features, states, overrides, segmentCount) });
   }
   const skipped = /* @__PURE__ */ new Map();
+  if (features.some((f) => f.name === "__proto__")) skipped.set("__proto__", "a flag can't be named __proto__ in a flag file");
   const noOverrides = /* @__PURE__ */ new Map();
   for (const { file: file2 } of files) {
     for (const [name, entry] of Object.entries(file2.flags)) {
@@ -31807,10 +31826,10 @@ program2.command("validate").description("Check the flag files without connectin
   const flags = new Set(files.flatMap((f) => Object.keys(f.flags))).size;
   console.log(`OK: ${files.length} environment file${files.length === 1 ? "" : "s"}, ${flags} flag${flags === 1 ? "" : "s"} each.`);
 });
-program2.command("plan").description("Show what apply would change, without changing anything").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("-f, --format <format>", "text or markdown", "text").option("-o, --out <file>", "also write the plan to this file").option("--code <dir>", "folder to search for code that uses changed flags", ".").option("--no-code", "don't search the code").action(async (opts) => {
+program2.command("plan").description("Show what apply would change, without changing anything").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("--skip-env <name>", "leave this environment out (repeat for more)", collect).option("-f, --format <format>", "text or markdown", "text").option("-o, --out <file>", "also write the plan to this file").option("--code <dir>", "folder to search for code that uses changed flags", ".").option("--no-code", "don't search the code").action(async (opts) => {
   if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
   const source = await readSource(opts.project);
-  const plans = await buildPlans(source, opts.dir, opts.env);
+  const plans = await buildPlans(source, opts.dir, opts.env, opts.skipEnv);
   const refs = opts.code === false ? void 0 : await findReferences(opts.code, changedFlags(plans), [opts.dir]);
   const notes = source.archived ? [] : ["Planned with read-only keys, which can't see whether a flag is archived or an environment uses feature versioning (v2). Apply checks both with the admin key and stops, changing nothing, if needed."];
   const changed = new Set(changedFlags(plans));
@@ -31822,9 +31841,9 @@ program2.command("plan").description("Show what apply would change, without chan
   console.log(output2);
   if (opts.out) await (0, import_promises3.writeFile)(opts.out, output2, "utf8");
 });
-program2.command("drift").description("Check whether Flagsmith still matches the flag files. Exit code 2 means drift.").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("-f, --format <format>", "text or markdown", "text").option("-o, --out <file>", "also write the report to this file").action(async (opts) => {
+program2.command("drift").description("Check whether Flagsmith still matches the flag files. Exit code 2 means drift.").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("--skip-env <name>", "leave this environment out (repeat for more)", collect).option("-f, --format <format>", "text or markdown", "text").option("-o, --out <file>", "also write the report to this file").action(async (opts) => {
   if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
-  const plans = await buildPlans(await readSource(opts.project), opts.dir, opts.env);
+  const plans = await buildPlans(await readSource(opts.project), opts.dir, opts.env, opts.skipEnv);
   const output2 = opts.format === "markdown" ? formatDriftMarkdown(plans) : formatDrift(plans);
   console.log(output2);
   if (opts.out) await (0, import_promises3.writeFile)(opts.out, output2, "utf8");
@@ -31855,10 +31874,10 @@ program2.command("stale").description("List flags with the same setting in every
   console.log(output2);
   if (opts.out) await (0, import_promises3.writeFile)(opts.out, output2, "utf8");
 });
-program2.command("apply").description("Make Flagsmith match the YAML files (never deletes flags)").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("-y, --yes", "don't ask for confirmation (for CI)").action(async (opts) => {
+program2.command("apply").description("Make Flagsmith match the YAML files (never deletes flags)").option("-p, --project <id-or-name>", "Flagsmith project").option("-d, --dir <dir>", "folder with the flag files", "flags").option("-e, --env <name>", "only this environment (repeat for more)", collect).option("--skip-env <name>", "leave this environment out (repeat for more)", collect).option("-y, --yes", "don't ask for confirmation (for CI)").action(async (opts) => {
   const fs2 = client();
   const project = await resolveProject(fs2, opts.project);
-  const plans = await buildPlans(adminSource(fs2, project.id), opts.dir, opts.env);
+  const plans = await buildPlans(adminSource(fs2, project.id), opts.dir, opts.env, opts.skipEnv);
   const conflicts = archiveConflicts(plans);
   if (conflicts.length > 0) {
     console.log(formatPlan(plans).replace(/\n\n[^\n]*$/, ""));

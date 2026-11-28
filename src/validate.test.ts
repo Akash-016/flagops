@@ -21,6 +21,11 @@ describe("checkSameFlags", () => {
     expect(problems[0]).toContain('"new_flag" is in development.yaml but missing from staging.yaml, production.yaml');
   });
 
+  it("notices a flag named like a built-in object property missing from a file", () => {
+    const problems = checkSameFlags([named("development.yaml", ["constructor"]), named("production.yaml", [])]);
+    expect(problems[0]).toContain('"constructor" is in development.yaml but missing from production.yaml');
+  });
+
   it("has nothing to compare with a single file", () => {
     expect(checkSameFlags([named("production.yaml", ["a"])])).toEqual([]);
   });

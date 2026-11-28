@@ -105,7 +105,7 @@ export function diffEnvironment(
 
   for (const [flag, current] of live) {
     // Names a flag file can't hold (pull skips them and says why) can't be managed or fixed in Git.
-    if (!(flag in wanted.flags) && !nameProblem(flag)) {
+    if (!Object.hasOwn(wanted.flags, flag) && !nameProblem(flag)) {
       changes.push({ kind: "untracked", flag, before: { enabled: current.enabled, value: current.value } });
     }
   }
@@ -389,7 +389,9 @@ export function driftFailedMarkdown(reason: string): string {
     "",
     "The drift check couldn't compare Flagsmith with Git, so drift may be going unnoticed:",
     "",
-    "<pre>" + text(reason) + "</pre>",
+    "<pre>" + text(reason.split("\n")[0].slice(0, 200)) + "</pre>",
+    "",
+    "The full message is in the run log.",
     "",
     "Fix the cause and run the check again. This issue closes itself once Flagsmith and Git match.",
   ].join("\n") + "\n";

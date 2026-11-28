@@ -94,7 +94,7 @@ export async function syncDriftIssue(
     return "opened";
   }
   if (drift && existing) {
-    await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
+    await github.rest.issues.update({ owner, repo, issue_number: existing.number, title: "Flag drift: Flagsmith no longer matches Git", body });
     log.info(`Updated drift issue #${existing.number}`);
     return "updated";
   }

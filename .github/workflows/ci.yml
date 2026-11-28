@@ -273,6 +273,7 @@ jobs:
         uses: ./
         with:
           command: apply
+          latest-only: "false" # CI applies test fixtures; a newer push mustn't fail this run
           api-url: ${{ env.FLAGSMITH_API_URL }}
           admin-key: ${{ env.FLAGSMITH_ADMIN_KEY }}
           project: ${{ env.FLAGSMITH_PROJECT }}

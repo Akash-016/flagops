@@ -45,10 +45,31 @@ if (!process.env.FLAGSMITH_API_URL?.trim()) {
   fail("api-url is empty. Add a repository variable FLAGSMITH_API_URL (Settings -> Secrets and variables -> Actions -> Variables).");
 }
 
+// Re-running an old workflow run reuses its commit. For apply that would put old flag files
+// back, so apply only runs for the commit that is still the tip of its branch.
+if (command === "apply" && input("LATEST_ONLY") !== "false") {
+  const ref = process.env.GITHUB_REF ?? "";
+  const sha = process.env.GITHUB_SHA ?? "";
+  if (ref.startsWith("refs/heads/") && sha) {
+    const branch = ref.slice("refs/heads/".length);
+    const r = spawnSync("git", ["ls-remote", "origin", ref], { encoding: "utf8", cwd: process.env.GITHUB_WORKSPACE });
+    const tip = (r.stdout ?? "").split(/\s/)[0];
+    if (r.status !== 0 || !tip) {
+      fail(`Couldn't check that ${sha.slice(0, 7)} is still the latest commit on ${branch} (is the repository checked out?). Set latest-only: false to skip this check.`);
+    }
+    if (tip !== sha) {
+      fail(`This run is for ${sha.slice(0, 7)}, but ${branch} is now at ${tip.slice(0, 7)}. Re-running an old run would apply old flag files; start a new run instead.`);
+    }
+  }
+}
+
 const args = ["--dir", input("DIR") || "flags"];
 if (input("PROJECT")) args.push("--project", input("PROJECT"));
 for (const env of input("ENVIRONMENTS").split(",").map((e) => e.trim()).filter(Boolean)) {
   args.push("--env", env);
+}
+for (const env of input("SKIP_ENVIRONMENTS").split(",").map((e) => e.trim()).filter(Boolean)) {
+  args.push("--skip-env", env);
 }
 
 const runnerTemp = process.env.RUNNER_TEMP ?? ".";

@@ -87,10 +87,13 @@ export const isArchived = (f: FlagEntry): boolean => f.archived === true;
 // trailing spaces (Flagsmith would trim them), at most 2000 characters.
 const BAD_NAME = /[\x00-\x1f\x7f]/;
 const BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+const INVISIBLE = /[\u00ad\u200b-\u200d\u2060\ufeff]/;
 
 export function nameProblem(name: string): string | undefined {
   if (name === "" || BAD_NAME.test(name)) return "flag names can't be empty or contain control characters";
   if (BIDI.test(name)) return "flag names can't contain text-direction characters (they can make one name look like another)";
+  if (INVISIBLE.test(name)) return "flag names can't contain invisible characters (they can make one name look like another)";
+  if (name === "__proto__") return "a flag can't be named __proto__ (a JavaScript object can't hold that key)";
   if (EDGE_SPACE.test(name)) return "Flagsmith trims leading and trailing spaces from flag names; remove them";
   if ([...name].length > MAX_NAME) return `flag names can be at most ${MAX_NAME} characters`;
   return undefined;
@@ -99,7 +102,7 @@ export function nameProblem(name: string): string | undefined {
 export const flagFileSchema = z.strictObject({
   environment: z.string().min(1),
   flags: z
-    .record(z.string(), flagSchema)
+    .preprocess((v) => (v === null ? {} : v), z.record(z.string(), flagSchema))
     .default({})
     .superRefine((flags, ctx) => {
       const seen = new Map<string, string>();
@@ -137,7 +140,7 @@ export function buildFlagFile(
   const flags: FlagFile["flags"] = {};
   for (const f of [...features].sort((a, b) => a.name.localeCompare(b.name))) {
     const state = stateByFeature.get(f.id);
-    if (!state) continue;
+    if (!state || f.name === "__proto__") continue; // pull reports it as skipped
     const entry: FlagEntry = { enabled: state.enabled, value: state.feature_state_value ?? null };
     const list = overrides?.get(f.name) ?? [];
     const unclear = list.find((o) => (segmentCount?.get(o.segment) ?? 1) !== 1);
@@ -160,7 +163,11 @@ export function parseFlagFile(text: string, source: string): FlagFile {
   try {
     data = YAML.parse(text);
   } catch (err) {
-    throw new Error(`${source} is not valid YAML: ${(err as Error).message}`);
+    throw new Error(`${source} is not valid YAML: ${(err as Error).message.split("\n")[0]}`);
+  }
+  const rawFlags = (data as { flags?: unknown } | null)?.flags;
+  if (rawFlags && typeof rawFlags === "object" && Object.hasOwn(rawFlags, "__proto__")) {
+    throw new Error(`${source} is not a valid flag file:\n  flags.__proto__: a flag can't be named __proto__ (a JavaScript object can't hold that key)`);
   }
   const result = flagFileSchema.safeParse(data);
   if (!result.success) {

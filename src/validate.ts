@@ -16,7 +16,7 @@ export function checkSameFlags(files: NamedFlagFile[]): string[] {
   const all = new Set(files.flatMap((f) => Object.keys(f.file.flags)));
   const problems: string[] = [];
   for (const flag of [...all].sort()) {
-    const missing = files.filter((f) => !(flag in f.file.flags)).map((f) => f.source);
+    const missing = files.filter((f) => !Object.hasOwn(f.file.flags, flag)).map((f) => f.source);
     if (missing.length === 0) {
       // Archiving is per project too, so every file must agree.
       const archivedIn = files.filter((f) => isArchived(f.file.flags[flag])).map((f) => f.source);
@@ -25,7 +25,7 @@ export function checkSameFlags(files: NamedFlagFile[]): string[] {
       }
       continue;
     }
-    const present = files.filter((f) => flag in f.file.flags).map((f) => f.source);
+    const present = files.filter((f) => Object.hasOwn(f.file.flags, flag)).map((f) => f.source);
     problems.push(
       `"${flag}" is in ${present.join(", ")} but missing from ${missing.join(", ")}. ` +
         `Flagsmith creates a flag in every environment, so add it there too (enabled: false to keep it off).`,

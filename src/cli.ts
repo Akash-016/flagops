@@ -99,6 +99,7 @@ program
     // Flagsmith accepts some names and values that validate rejects (a name with a tab, say).
     // Leave those flags out of every file, and say so, instead of writing files that won't validate.
     const skipped = new Map<string, string>();
+    if (features.some((f) => f.name === "__proto__")) skipped.set("__proto__", "a flag can't be named __proto__ in a flag file");
     const noOverrides = new Map<string, string>();
     for (const { file } of files) {
       for (const [name, entry] of Object.entries(file.flags)) {
@@ -160,6 +161,7 @@ interface PlanOptions {
   project?: string;
   dir: string;
   env?: string[];
+  skipEnv?: string[];
   format: string;
   out?: string;
   code: string | false; // false when --no-code is given
@@ -171,6 +173,7 @@ program
   .option("-p, --project <id-or-name>", "Flagsmith project")
   .option("-d, --dir <dir>", "folder with the flag files", "flags")
   .option("-e, --env <name>", "only this environment (repeat for more)", collect)
+  .option("--skip-env <name>", "leave this environment out (repeat for more)", collect)
   .option("-f, --format <format>", "text or markdown", "text")
   .option("-o, --out <file>", "also write the plan to this file")
   .option("--code <dir>", "folder to search for code that uses changed flags", ".")
@@ -178,7 +181,7 @@ program
   .action(async (opts: PlanOptions) => {
     if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
     const source = await readSource(opts.project);
-    const plans = await buildPlans(source, opts.dir, opts.env);
+    const plans = await buildPlans(source, opts.dir, opts.env, opts.skipEnv);
     const refs = opts.code === false ? undefined : await findReferences(opts.code, changedFlags(plans), [opts.dir]);
     const notes = source.archived
       ? []
@@ -199,11 +202,12 @@ program
   .option("-p, --project <id-or-name>", "Flagsmith project")
   .option("-d, --dir <dir>", "folder with the flag files", "flags")
   .option("-e, --env <name>", "only this environment (repeat for more)", collect)
+  .option("--skip-env <name>", "leave this environment out (repeat for more)", collect)
   .option("-f, --format <format>", "text or markdown", "text")
   .option("-o, --out <file>", "also write the report to this file")
-  .action(async (opts: { project?: string; dir: string; env?: string[]; format: string; out?: string }) => {
+  .action(async (opts: { project?: string; dir: string; env?: string[]; skipEnv?: string[]; format: string; out?: string }) => {
     if (!["text", "markdown"].includes(opts.format)) throw new Error(`--format must be text or markdown`);
-    const plans = await buildPlans(await readSource(opts.project), opts.dir, opts.env);
+    const plans = await buildPlans(await readSource(opts.project), opts.dir, opts.env, opts.skipEnv);
     const output = opts.format === "markdown" ? formatDriftMarkdown(plans) : formatDrift(plans);
     console.log(output);
     if (opts.out) await writeFile(opts.out, output, "utf8");
@@ -255,11 +259,12 @@ program
   .option("-p, --project <id-or-name>", "Flagsmith project")
   .option("-d, --dir <dir>", "folder with the flag files", "flags")
   .option("-e, --env <name>", "only this environment (repeat for more)", collect)
+  .option("--skip-env <name>", "leave this environment out (repeat for more)", collect)
   .option("-y, --yes", "don't ask for confirmation (for CI)")
-  .action(async (opts: { project?: string; dir: string; env?: string[]; yes?: boolean }) => {
+  .action(async (opts: { project?: string; dir: string; env?: string[]; skipEnv?: string[]; yes?: boolean }) => {
     const fs = client();
     const project = await resolveProject(fs, opts.project);
-    const plans = await buildPlans(adminSource(fs, project.id), opts.dir, opts.env);
+    const plans = await buildPlans(adminSource(fs, project.id), opts.dir, opts.env, opts.skipEnv);
     const conflicts = archiveConflicts(plans);
     if (conflicts.length > 0) {
       // Show the plan without its "N changes to apply" line: none will be.
