@@ -233,10 +233,17 @@ program
       fs.listTags(project.id),
     ]);
     const statesByEnv = new Map<string, FeatureState[]>();
-    for (const env of environments) statesByEnv.set(env.name, await fs.listEnvironmentStates(env.api_key));
+    // A flag whose default is the same everywhere can still matter to some users.
+    const overrides = new Map<number, string>();
+    for (const env of environments) {
+      statesByEnv.set(env.name, await fs.listEnvironmentStates(env.api_key));
+      for (const o of await fs.listNonDefaultStates(env.id)) {
+        if (!overrides.has(o.feature)) overrides.set(o.feature, `${o.identity !== null ? "identity" : "segment"} override in ${env.name}`);
+      }
+    }
 
-    const stale = findStaleFlags(features, statesByEnv, tags, days);
-    const refs = opts.code === false ? undefined : await findReferences(opts.code, stale.map((s) => s.name), [opts.dir]);
+    const stale = findStaleFlags(features, statesByEnv, tags, days, new Date(), overrides);
+    const refs = opts.code === false ? undefined : await findReferences(opts.code, stale.filter((s) => !s.keptBecause).map((s) => s.name), [opts.dir]);
     const output = opts.format === "markdown" ? formatStaleMarkdown(stale, days, refs) : formatStale(stale, days, refs);
     console.log(output);
     if (opts.out) await writeFile(opts.out, output, "utf8");

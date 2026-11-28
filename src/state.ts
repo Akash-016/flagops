@@ -126,7 +126,9 @@ export function liveFromDocument(doc: EnvironmentDocument): LiveFlags {
 }
 
 export async function keySource(apiUrl: string, keys: string[]): Promise<LiveSource> {
-  const docs = await Promise.all(keys.map((k) => readEnvironmentDocument(apiUrl, k)));
+  // One at a time: a small Flagsmith building several large documents at once times out.
+  const docs: EnvironmentDocument[] = [];
+  for (const k of keys) docs.push(await readEnvironmentDocument(apiUrl, k));
   const projects = new Set(docs.map((d) => d.project.id));
   if (projects.size > 1) {
     throw new Error(`The environment keys belong to different projects: ${[...new Set(docs.map((d) => d.project.name))].join(", ")}`);

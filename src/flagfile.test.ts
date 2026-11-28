@@ -94,6 +94,11 @@ describe("parseFlagFile", () => {
     expect(long(2000)).not.toThrow();
   });
 
+  it("rejects text-direction characters in names, which can make one name look like another", () => {
+    expect(named("admin" + String.fromCharCode(0x202e) + "nimda")).toThrow(/text-direction/);
+    expect(named("flag" + String.fromCharCode(0x2066))).toThrow(/text-direction/);
+  });
+
   it("trims like Python's strip(): Flagsmith keeps a leading U+FEFF, so it is allowed", () => {
     expect(valued(String.fromCharCode(0xfeff) + "a")).not.toThrow();
     expect(valued("a" + String.fromCharCode(0xa0))).toThrow(/trims/);

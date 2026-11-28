@@ -1000,14 +1000,14 @@ var require_foldFlowLines = __commonJS({
     var FOLD_FLOW = "flow";
     var FOLD_BLOCK = "block";
     var FOLD_QUOTED = "quoted";
-    function foldFlowLines(text, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
+    function foldFlowLines(text2, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
       if (!lineWidth || lineWidth < 0)
-        return text;
+        return text2;
       if (lineWidth < minContentWidth)
         minContentWidth = 0;
       const endStep = Math.max(1 + minContentWidth, 1 + lineWidth - indent.length);
-      if (text.length <= endStep)
-        return text;
+      if (text2.length <= endStep)
+        return text2;
       const folds = [];
       const escapedFolds = {};
       let end = lineWidth - indent.length;
@@ -1024,14 +1024,14 @@ var require_foldFlowLines = __commonJS({
       let escStart = -1;
       let escEnd = -1;
       if (mode === FOLD_BLOCK) {
-        i = consumeMoreIndentedLines(text, i, indent.length);
+        i = consumeMoreIndentedLines(text2, i, indent.length);
         if (i !== -1)
           end = i + endStep;
       }
-      for (let ch; ch = text[i += 1]; ) {
+      for (let ch; ch = text2[i += 1]; ) {
         if (mode === FOLD_QUOTED && ch === "\\") {
           escStart = i;
-          switch (text[i + 1]) {
+          switch (text2[i + 1]) {
             case "x":
               i += 3;
               break;
@@ -1048,12 +1048,12 @@ var require_foldFlowLines = __commonJS({
         }
         if (ch === "\n") {
           if (mode === FOLD_BLOCK)
-            i = consumeMoreIndentedLines(text, i, indent.length);
+            i = consumeMoreIndentedLines(text2, i, indent.length);
           end = i + indent.length + endStep;
           split = void 0;
         } else {
           if (ch === " " && prev && prev !== " " && prev !== "\n" && prev !== "	") {
-            const next = text[i + 1];
+            const next = text2[i + 1];
             if (next && next !== " " && next !== "\n" && next !== "	")
               split = i;
           }
@@ -1065,12 +1065,12 @@ var require_foldFlowLines = __commonJS({
             } else if (mode === FOLD_QUOTED) {
               while (prev === " " || prev === "	") {
                 prev = ch;
-                ch = text[i += 1];
+                ch = text2[i += 1];
                 overflow = true;
               }
               const j = i > escEnd + 1 ? i - 2 : escStart - 1;
               if (escapedFolds[j])
-                return text;
+                return text2;
               folds.push(j);
               escapedFolds[j] = true;
               end = j + endStep;
@@ -1085,39 +1085,39 @@ var require_foldFlowLines = __commonJS({
       if (overflow && onOverflow)
         onOverflow();
       if (folds.length === 0)
-        return text;
+        return text2;
       if (onFold)
         onFold();
-      let res = text.slice(0, folds[0]);
+      let res = text2.slice(0, folds[0]);
       for (let i2 = 0; i2 < folds.length; ++i2) {
         const fold = folds[i2];
-        const end2 = folds[i2 + 1] || text.length;
+        const end2 = folds[i2 + 1] || text2.length;
         if (fold === 0)
           res = `
-${indent}${text.slice(0, end2)}`;
+${indent}${text2.slice(0, end2)}`;
         else {
           if (mode === FOLD_QUOTED && escapedFolds[fold])
-            res += `${text[fold]}\\`;
+            res += `${text2[fold]}\\`;
           res += `
-${indent}${text.slice(fold + 1, end2)}`;
+${indent}${text2.slice(fold + 1, end2)}`;
         }
       }
       return res;
     }
-    function consumeMoreIndentedLines(text, i, indent) {
+    function consumeMoreIndentedLines(text2, i, indent) {
       let end = i;
       let start = i + 1;
-      let ch = text[start];
+      let ch = text2[start];
       while (ch === " " || ch === "	") {
         if (i < start + indent) {
-          ch = text[++i];
+          ch = text2[++i];
         } else {
           do {
-            ch = text[++i];
+            ch = text2[++i];
           } while (ch && ch !== "\n");
           end = i;
           start = i + 1;
-          ch = text[start];
+          ch = text2[start];
         }
       }
       return end;
@@ -16718,8 +16718,8 @@ function ko_default() {
 }
 
 // node_modules/zod/v4/locales/lt.js
-var capitalizeFirstCharacter = (text) => {
-  return text.charAt(0).toUpperCase() + text.slice(1);
+var capitalizeFirstCharacter = (text2) => {
+  return text2.charAt(0).toUpperCase() + text2.slice(1);
 };
 function getUnitTypeFromNumber(number4) {
   const abs = Math.abs(number4);
@@ -27130,8 +27130,10 @@ var flagSchema = external_exports.strictObject({
   ...f.segments ? { segments: f.segments } : {}
 }));
 var BAD_NAME = /[\x00-\x1f\x7f]/;
+var BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 function nameProblem(name) {
   if (name === "" || BAD_NAME.test(name)) return "flag names can't be empty or contain control characters";
+  if (BIDI.test(name)) return "flag names can't contain text-direction characters (they can make one name look like another)";
   if (EDGE_SPACE.test(name)) return "Flagsmith trims leading and trailing spaces from flag names; remove them";
   if ([...name].length > MAX_NAME) return `flag names can be at most ${MAX_NAME} characters`;
   return void 0;
@@ -27155,6 +27157,22 @@ var MAX_FILE_BYTES = 1024 * 1024;
 
 // src/diff.ts
 var guardOutput = (s) => s.replace(/\r(?!\n)/g, "\\r").replace(/^(\s*)::/gm, "$1: :").replace(/##\[/g, "## [");
+function text(s) {
+  return s.replace(/[^A-Za-z0-9 ,/=?+%-]/gu, (c) => `&#${c.codePointAt(0)};${c === "@" ? "<wbr>" : ""}`);
+}
+var DRIFT_MARKER = "<!-- flagops-drift -->";
+function driftFailedMarkdown(reason) {
+  return [
+    DRIFT_MARKER,
+    "## Drift check failed",
+    "",
+    "The drift check couldn't compare Flagsmith with Git, so drift may be going unnoticed:",
+    "",
+    "<pre>" + text(reason) + "</pre>",
+    "",
+    "Fix the cause and run the check again. This issue closes itself once Flagsmith and Git match."
+  ].join("\n") + "\n";
+}
 
 // src/action.ts
 var input2 = (name) => (process.env[`INPUT_${name}`] ?? "").trim();
@@ -27203,6 +27221,12 @@ if (stderr) process.stderr.write(guardOutput(stderr) + "\n");
 var status = result.status ?? 1;
 if (status !== 0 && !(command === "drift" && status === 2)) {
   const reason = stderr.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith("(node:") && !l.startsWith("(Use `node"));
+  if (command === "drift") {
+    (0, import_node_fs.writeFileSync)(reportFile, driftFailedMarkdown(reason.join("\n") || `exit code ${status}`));
+    if (process.env.GITHUB_OUTPUT) (0, import_node_fs.appendFileSync)(process.env.GITHUB_OUTPUT, `report-file=${reportFile}
+failed=true
+`);
+  }
   fail(`flagops ${command} failed: ${(reason.join("\n") || `exit code ${status}`).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A")}`);
 }
 var output2 = (lines) => {

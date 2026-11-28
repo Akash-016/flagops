@@ -248,10 +248,16 @@ export class FlagsmithClient {
     return this.getAll<Segment>(`/projects/${projectId}/segments/`);
   }
 
+// Every state in an environment that isn't a flag's default: segment and identity overrides.
+  listNonDefaultStates(environmentId: number): Promise<OverrideState[]> {
+    return this.getAll<OverrideState>(`/features/featurestates/?environment=${environmentId}`).then((all) =>
+      all.filter((s) => s.identity !== null || s.feature_segment !== null),
+    );
+  }
+
   // Every segment override state in an environment (not identity overrides).
   async listOverrideStates(environmentId: number): Promise<OverrideState[]> {
-    const states = await this.getAll<OverrideState>(`/features/featurestates/?environment=${environmentId}`);
-    return states.filter((s) => s.identity === null && s.feature_segment !== null);
+    return (await this.listNonDefaultStates(environmentId)).filter((s) => s.identity === null);
   }
 
   // One flag's overrides in one environment, with segment names and priorities.

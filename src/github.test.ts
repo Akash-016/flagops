@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { COMMENT_MARKER, DRIFT_MARKER } from "./diff.js";
+import { COMMENT_MARKER, DRIFT_MARKER, driftFailedMarkdown } from "./diff.js";
 import { fitBody, postPlan, syncDriftIssue, type Context, type GitHub } from "./github.js";
 
 const context: Context = { serverUrl: "https://github.com", runId: 7, repo: { owner: "o", repo: "r" }, issue: { number: 3 } };
@@ -85,6 +85,18 @@ describe("drift issue", () => {
     expect(await syncDriftIssue(github, context, log, report(), false)).toBe("closed");
     expect(calls.map((c) => c[0])).toEqual(["createComment", "update"]);
     expect(calls[1][1]).toMatchObject({ issue_number: 5, state: "closed", state_reason: "completed" });
+  });
+
+  it("opens an issue when the check itself fails, and comments on an open one instead", async () => {
+    const failed = file(driftFailedMarkdown("Flagsmith GET .../environment-document/ failed: no answer in 30 s"));
+    const fresh = fake([]);
+    expect(await syncDriftIssue(fresh.github, context, log, failed, false, true)).toBe("opened");
+    expect(fresh.calls[0]).toEqual(["create", expect.objectContaining({ title: "Flag drift check failed" })]);
+
+    const open = fake([{ id: 1, number: 5, user: bot, body: `${DRIFT_MARKER}\nold drift` }]);
+    expect(await syncDriftIssue(open.github, context, log, failed, false, true)).toBe("updated");
+    expect(open.calls.map((c) => c[0])).toEqual(["createComment"]);
+    expect(String(open.calls[0][1].body)).toContain("The latest drift check failed");
   });
 
   it("leaves alone issues by people and pull requests, even with the marker", async () => {
