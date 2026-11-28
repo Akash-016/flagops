@@ -34,7 +34,10 @@ export type Change =
   | { kind: "order"; flag: string; before: string[]; after: string[] }
   // YAML gives the flag an override for a segment name that matches no segment in Flagsmith
   // (renamed or deleted in the dashboard), or several. Apply skips this flag's overrides here.
-  | { kind: "segment"; flag: string; segment: string; found: number };
+  | { kind: "segment"; flag: string; segment: string; found: number }
+  // The flag file names an environment Flagsmith doesn't have (renamed or deleted there).
+  // flag is "" so it sorts first; apply stops before changing anything while this is so.
+  | { kind: "environment"; flag: ""; known: string[] };
 
 export interface EnvironmentPlan {
   environment: string;
@@ -135,6 +138,11 @@ export function segmentProblems(plans: EnvironmentPlan[]): string[] {
     }
   }
   return [...seen];
+}
+
+// Flag files whose environment Flagsmith doesn't have: apply must not run until that's fixed.
+export function missingEnvironments(plans: EnvironmentPlan[]): string[] {
+  return plans.filter((p) => p.changes.some((c) => c.kind === "environment")).map((p) => p.environment);
 }
 
 // Flags archived on one side only: apply must not run until YAML and Flagsmith agree.
@@ -240,6 +248,8 @@ function describe(change: Change): string {
       if (!change.after) return `  - ${where}: override removed (was ${setting(change.before)})`;
       return `  ~ ${where}: ${setting(change.before)} -> ${setting(change.after)}`;
     }
+    case "environment":
+      return `  ! no such environment in Flagsmith (renamed or deleted?); it has: ${change.known.map(safe).join(", ")}`;
     case "segment":
       return `  ! ${flag} [segment ${safe(change.segment)}]: ${change.found === 0 ? "no such segment in Flagsmith" : `${change.found} segments have this name`} (apply leaves this flag's overrides alone)`;
     case "order":
@@ -312,6 +322,8 @@ function planRow(c: Change): string {
     case "order": {
       return `| ~ | ${code(c.flag)} segment order | ${c.before.map(code).join(", ")} | **${c.after.map(code).join(", ")}** |`;
     }
+    case "environment":
+      return `| ! | (environment) | no such environment in Flagsmith | apply stops until the file or Flagsmith is fixed |`;
     case "segment":
       return `| ! | ${code(c.flag)} for segment ${code(c.segment)} | ${c.found === 0 ? "no such segment in Flagsmith" : `${c.found} segments with this name`} | apply leaves this flag's overrides alone until fixed |`;
   }
@@ -383,6 +395,8 @@ function describeDrift(c: Change): { git: string; live: string; what: string } {
     }
     case "order":
       return { git: `segments ${c.after.map(code).join(", ")}`, live: `segments ${c.before.map(code).join(", ")}`, what: "segment order changed outside Git" };
+    case "environment":
+      return { git: "this environment", live: `no such environment (Flagsmith has ${c.known.map(code).join(", ")})`, what: "environment renamed or deleted outside Git" };
     case "segment":
       return c.found === 0
         ? { git: `override for segment ${code(c.segment)}`, live: "no such segment", what: "segment renamed or deleted outside Git" }
@@ -431,7 +445,7 @@ export function formatDriftMarkdown(plans: EnvironmentPlan[]): string {
     "## Flag drift detected",
     "",
     `Flagsmith differs from the flag files in Git in **${total} place${total === 1 ? "" : "s"}**. ` +
-      "Someone probably changed them in the Flagsmith dashboard.",
+      "Usually someone changed them in the Flagsmith dashboard. It can also be a production deployment that was rejected after its pull request was merged.",
   );
   const drifted = plans.filter((p) => p.changes.length > 0);
   if (drifted.length > 1) lines.push("", drifted.map((p) => `${code(p.environment)}: ${p.changes.length}`).join(" · "));

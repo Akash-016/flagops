@@ -146,6 +146,19 @@ flags:
     await expect(buildPlans(twoEnvs, dir, undefined, ["Prod"])).rejects.toThrow(/to skip: prod/);
   });
 
+  it("reports an environment missing from Flagsmith as drift, checks the others, and apply refuses", async () => {
+    const dir = await flagsDir(["dark_mode"]);
+    await writeFile(path.join(dir, "qa.yaml"), "environment: QA\nflags:\n  dark_mode:\n    enabled: true\n    value: null\n");
+    const plans = await buildPlans(source({ dark_mode: false }), dir);
+    expect(plans.map((p) => [p.environment, p.changes.map((c) => c.kind)])).toEqual([
+      ["QA", ["environment"]],
+      ["Production", ["update"]],
+    ]);
+    expect(countDrift(plans)).toBe(2);
+    expect(formatDrift(plans)).toContain("environment renamed or deleted outside Git");
+    await expect(applyPlans({} as FlagsmithClient, 1, plans)).rejects.toThrow(/no environment named QA/);
+  });
+
   it("plans normally otherwise", async () => {
     const dir = await flagsDir(["dark_mode"]);
     const [plan] = await buildPlans(source({ dark_mode: false }, ["old_flag"]), dir);

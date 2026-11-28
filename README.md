@@ -79,7 +79,7 @@ npx github:Akash-016/flagops#v1 plan     # what would change
 npx github:Akash-016/flagops#v1 apply    # make the change (asks first)
 ```
 
-**5. Set up the GitHub Action for your team** (about 20 minutes) in the repo that holds your `flags/` folder
+**5. Set up the GitHub Action for your team** (a few minutes with `setup-github`; 45–90 minutes by hand) in the repo that holds your `flags/` folder
 
 ```bash
 npx github:Akash-016/flagops#v1 init                         # writes the four workflows into .github/workflows/
@@ -289,7 +289,7 @@ Flagsmith has an official Terraform provider, and it's a good choice if you alre
 Segment overrides are managed (see [YAML format](#yaml-format)). Segment rules and per-user overrides are left to Flagsmith. See [Limits](#limits).
 
 **Can someone bypass the review?**
-Not from a pull request: pull request workflows only get read-only keys, and the admin key is only available to `apply` jobs on `main`. Someone who can merge workflow changes without review can, so require reviews for `.github/`. Someone with dashboard access can still change flags, and the drift check reports changes to the flags FlagOps manages. See the [security model](#security-model).
+Not to change flags in Flagsmith from a pull request: pull request workflows only get read-only keys, and the admin key is only available to `apply` jobs on `main`. Read-only keys can still do what a server-side SDK does, such as setting identity traits, which can move a user into a segment (see the [security model](#security-model)). Someone who can merge workflow changes without review can, so require reviews for `.github/`. Someone with dashboard access can still change flags, and the drift check reports changes to the flags FlagOps manages. See the [security model](#security-model).
 
 **Will it delete my flags?**
 No. Flags missing from the YAML are reported, never removed.

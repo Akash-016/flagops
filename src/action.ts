@@ -45,20 +45,30 @@ if (!process.env.FLAGSMITH_API_URL?.trim()) {
   fail("api-url is empty. Add a repository variable FLAGSMITH_API_URL (Settings -> Secrets and variables -> Actions -> Variables).");
 }
 
-// Re-running an old workflow run reuses its commit. For apply that would put old flag files
-// back, so apply only runs for the commit that is still the tip of its branch.
+// Re-running an old workflow run reuses its commit. For apply that could put old flag files
+// back, so apply only runs if its flag files are the same as on the tip of its branch. Other
+// commits since (a README change, say) don't matter.
 if (command === "apply" && input("LATEST_ONLY") !== "false") {
   const ref = process.env.GITHUB_REF ?? "";
   const sha = process.env.GITHUB_SHA ?? "";
+  const cwd = process.env.GITHUB_WORKSPACE ?? ".";
   if (ref.startsWith("refs/heads/") && sha) {
     const branch = ref.slice("refs/heads/".length);
-    const r = spawnSync("git", ["ls-remote", "origin", ref], { encoding: "utf8", cwd: process.env.GITHUB_WORKSPACE });
+    const git = (...a: string[]) => spawnSync("git", a, { encoding: "utf8", cwd });
+    const r = git("ls-remote", "origin", ref);
     const tip = (r.stdout ?? "").split(/\s/)[0];
     if (r.status !== 0 || !tip) {
-      fail(`Couldn't check that ${sha.slice(0, 7)} is still the latest commit on ${branch} (is the repository checked out?). Set latest-only: false to skip this check.`);
+      fail(`Couldn't check ${branch} for newer flag files (is the repository checked out?). Set latest-only: false to skip this check.`);
     }
     if (tip !== sha) {
-      fail(`This run is for ${sha.slice(0, 7)}, but ${branch} is now at ${tip.slice(0, 7)}. Re-running an old run would apply old flag files; start a new run instead.`);
+      const dir = path.relative(cwd, path.resolve(cwd, input("DIR") || "flags")) || ".";
+      const fetched = git("fetch", "--no-tags", "--depth=1", "origin", tip);
+      const diff = fetched.status === 0 ? git("diff", "--quiet", sha, "FETCH_HEAD", "--", dir) : fetched;
+      if (diff.status === 1) {
+        fail(`This run is for ${sha.slice(0, 7)}, but the flag files on ${branch} have changed since (now ${tip.slice(0, 7)}). Re-running an old run would apply old flag files; the newer commit's run applies the current ones.`);
+      }
+      if (diff.status !== 0) fail(`Couldn't compare the flag files with ${branch} (${(diff.stderr ?? "").trim().split("\n")[0]}). Set latest-only: false to skip this check.`);
+      console.log(`${branch} has moved on to ${tip.slice(0, 7)}, but its flag files are the same as in ${sha.slice(0, 7)}, so this apply goes ahead.`);
     }
   }
 }
@@ -71,6 +81,7 @@ for (const env of input("ENVIRONMENTS").split(",").map((e) => e.trim()).filter(B
 for (const env of input("SKIP_ENVIRONMENTS").split(",").map((e) => e.trim()).filter(Boolean)) {
   args.push("--skip-env", env);
 }
+if (command === "apply" && input("ALLOW_PRODUCTION") === "false") args.push("--no-production");
 
 const runnerTemp = process.env.RUNNER_TEMP ?? ".";
 const reportFile = path.join(runnerTemp, `flagops-${command}.md`);

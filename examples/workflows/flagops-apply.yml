@@ -1,7 +1,7 @@
 # Copy to .github/workflows/ in the repo that holds your flag files.
 # On merge to main: applies non-production flags first, then waits for a
-# reviewer to approve before applying production. If your production environment has another
-# name, change "Production" below (three places). The reviewer finds the exact Production
+# reviewer to approve before applying production. If your environments have other names,
+# change them below. The reviewer finds the exact Production
 # plan in the run's summary (written by the non-production job) before approving.
 #
 # Rejecting the production deployment leaves Git ahead of Production: revert the pull request,
@@ -10,8 +10,11 @@
 # The Production plan is made before the approval. A dashboard change in Production between that
 # plan and the approval is applied over too; the production job's log lists what it changed.
 #
-# Each apply checks that its commit is still the tip of main, so re-running an old run can't put
-# old flag files back.
+# Each apply checks that its flag files are still the ones on main, so re-running an old run
+# can't put old flag files back; to apply the current main again, use "Run workflow".
+#
+# The non-production job applies only the environments listed, and refuses (changing nothing)
+# if any of them looks like production. Add a new non-production environment to that list.
 #
 # Only apply gets the admin key, and only through GitHub Environments limited to main,
 # so no pull request workflow can read it. Setup (Settings -> Environments):
@@ -30,6 +33,7 @@ on:
     branches: [main]
     paths:
       - "flags/**"
+  workflow_dispatch: # run it by hand (Actions tab) to apply the current main again
 
 permissions:
   contents: read
@@ -48,7 +52,8 @@ jobs:
       - uses: Akash-016/flagops@4726e2a3b1cb098e55490dba3c1ba92aeab3035f # v1.3.1: pinned, since this job holds the admin key
         with:
           command: apply
-          skip-environments: Production # every other environment, including any you add later
+          environments: Development, Staging # list every non-production environment here
+          allow-production: "false" # refuse, changing nothing, if a production-like one slips in
           api-url: ${{ vars.FLAGSMITH_API_URL }}
           admin-key: ${{ secrets.FLAGSMITH_ADMIN_KEY }}
       # What the production job will change, in this run's summary, so the reviewer sees it

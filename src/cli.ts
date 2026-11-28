@@ -8,6 +8,8 @@ import { buildFlagFile, fileNameFor, flagFileSchema, toYaml, type FlagFile } fro
 import { createInterface } from "node:readline/promises";
 import {
   archiveConflicts,
+  isProduction,
+  missingEnvironments,
   multivariateNote,
   segmentProblems,
   changedFlags,
@@ -23,7 +25,8 @@ import { findReferences } from "./references.js";
 import { findStaleFlags, formatStale, formatStaleMarkdown } from "./stale.js";
 import { adminSource, buildPlans, keySource, readFlagFiles, type LiveSource } from "./state.js";
 import { applyPlans } from "./apply.js";
-import { checklist, githubRepo, writeWorkflows } from "./init.js";
+import { checklist, githubRepo, writeRepoFiles, writeWorkflows } from "./init.js";
+import { fileURLToPath } from "node:url";
 import { planSetup, realGh, runSetup } from "./setup.js";
 import { spawnSync } from "node:child_process";
 
@@ -68,11 +71,14 @@ program
   .action(async (opts: { dir: string; production: string; force?: boolean }) => {
     const options = { dir: opts.dir, production: opts.production, force: Boolean(opts.force) };
     // The example workflows ship with FlagOps, next to dist/.
-    const { written, kept } = await writeWorkflows(".", path.resolve(__dirname, "..", "examples", "workflows"), options);
+    const here = typeof __dirname === "string" ? __dirname : path.dirname(fileURLToPath(import.meta.url));
+    const { written, kept } = await writeWorkflows(".", path.resolve(here, "..", "examples", "workflows"), options);
     for (const name of written) console.log(`  wrote .github/workflows/${name}`);
     for (const name of kept) console.log(`  kept  .github/workflows/${name} (already there; --force overwrites it)`);
     const remote = spawnSync("git", ["config", "--get", "remote.origin.url"], { encoding: "utf8" }).stdout ?? "";
-    console.log("\n" + checklist(options, githubRepo(remote)));
+    const repo = githubRepo(remote);
+    for (const file of await writeRepoFiles(".", repo?.split("/")[0])) console.log(`  wrote ${file}`);
+    console.log("\n" + checklist(options, repo));
   });
 
 program
@@ -348,10 +354,25 @@ program
   .option("-e, --env <name>", "only this environment (repeat for more)", collect)
   .option("--skip-env <name>", "leave this environment out (repeat for more)", collect)
   .option("-y, --yes", "don't ask for confirmation (for CI)")
-  .action(async (opts: { project?: string; dir: string; env?: string[]; skipEnv?: string[]; yes?: boolean }) => {
+  .option("--no-production", "refuse to apply any environment that looks like production (for the job that has no approval step)")
+  .action(async (opts: { project?: string; dir: string; env?: string[]; skipEnv?: string[]; yes?: boolean; production: boolean }) => {
     const fs = client();
     const project = await resolveProject(fs, opts.project);
     const plans = await buildPlans(adminSource(fs, project.id), opts.dir, opts.env, opts.skipEnv);
+    // A job without an approval step must never reach production, even one added later under a
+    // new name ("Production EU"). Skipping environments ("everything except Production") implies it.
+    if (!opts.production || (opts.skipEnv?.length ?? 0) > 0) {
+      const prod = plans.filter((p) => isProduction(p.environment)).map((p) => p.environment);
+      if (prod.length > 0) {
+        throw new Error(
+          `${prod.join(", ")} looks like production, and this apply doesn't apply production (--no-production or --skip-env). Nothing changed. List it in the production job instead.`,
+        );
+      }
+    }
+    const missingEnvs = missingEnvironments(plans);
+    if (missingEnvs.length > 0) {
+      throw new Error(`Flagsmith has no environment named ${missingEnvs.join(", ")}. Nothing changed. Rename the flag file's environment, or the environment in Flagsmith.`);
+    }
     const conflicts = archiveConflicts(plans);
     if (conflicts.length > 0) {
       // Show the plan without its "N changes to apply" line: none will be.
