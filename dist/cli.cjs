@@ -11083,10 +11083,15 @@ var FlagsmithClient = class {
   listSegments(projectId) {
     return this.getAll(`/projects/${projectId}/segments/`);
   }
+  // Every state in an environment that isn't a flag's default: segment and identity overrides.
+  listNonDefaultStates(environmentId) {
+    return this.getAll(`/features/featurestates/?environment=${environmentId}`).then(
+      (all) => all.filter((s) => s.identity !== null || s.feature_segment !== null)
+    );
+  }
   // Every segment override state in an environment (not identity overrides).
   async listOverrideStates(environmentId) {
-    const states = await this.getAll(`/features/featurestates/?environment=${environmentId}`);
-    return states.filter((s) => s.identity === null && s.feature_segment !== null);
+    return (await this.listNonDefaultStates(environmentId)).filter((s) => s.identity === null);
   }
   // One flag's overrides in one environment, with segment names and priorities.
   listFeatureSegments(environmentId, featureId) {
@@ -30896,8 +30901,10 @@ var flagSchema = external_exports.strictObject({
 }));
 var isArchived = (f) => f.archived === true;
 var BAD_NAME = /[\x00-\x1f\x7f]/;
+var BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 function nameProblem(name) {
   if (name === "" || BAD_NAME.test(name)) return "flag names can't be empty or contain control characters";
+  if (BIDI.test(name)) return "flag names can't contain text-direction characters (they can make one name look like another)";
   if (EDGE_SPACE.test(name)) return "Flagsmith trims leading and trailing spaces from flag names; remove them";
   if ([...name].length > MAX_NAME) return `flag names can be at most ${MAX_NAME} characters`;
   return void 0;
@@ -31366,7 +31373,7 @@ function formatPlan(plans, refs) {
 // src/stale.ts
 var PERMANENT_TAG = "permanent";
 var DAY_MS = 24 * 60 * 60 * 1e3;
-function findStaleFlags(features, statesByEnv, tags, days, now = /* @__PURE__ */ new Date()) {
+function findStaleFlags(features, statesByEnv, tags, days, now = /* @__PURE__ */ new Date(), overrides = /* @__PURE__ */ new Map()) {
   const permanentIds = new Set(tags.filter((t) => t.label.toLowerCase() === PERMANENT_TAG).map((t) => t.id));
   const stale = [];
   for (const f of features) {
@@ -31382,7 +31389,8 @@ function findStaleFlags(features, statesByEnv, tags, days, now = /* @__PURE__ */
     const lastChanged = new Date(Math.max(...times));
     const daysUnchanged = Math.floor((now.getTime() - lastChanged.getTime()) / DAY_MS);
     if (daysUnchanged < days) continue;
-    stale.push({ name: f.name, enabled: first.enabled, value: first.feature_state_value ?? null, lastChanged, daysUnchanged });
+    const keptBecause = f.type === "MULTIVARIATE" ? "multivariate: its variants still split users" : overrides.get(f.id);
+    stale.push({ name: f.name, enabled: first.enabled, value: first.feature_state_value ?? null, lastChanged, daysUnchanged, ...keptBecause ? { keptBecause } : {} });
   }
   return stale.sort((a, b) => b.daysUnchanged - a.daysUnchanged || a.name.localeCompare(b.name));
 }
@@ -31394,20 +31402,29 @@ function refsText(refs, max = 5) {
   const shown = refs.slice(0, max).map((r) => `${r.file}:${r.line}`).join(", ");
   return shown + (refs.length > max ? ` (+${refs.length - max} more)` : "");
 }
-function formatStale(stale, days, refs) {
-  if (stale.length === 0) return `No stale flags (same in every environment and unchanged for ${days}+ days).`;
+var keptLines = (kept) => kept.length === 0 ? [] : ["", "Same default everywhere, but not stale (keep them):", ...kept.map((k) => `  ${safe(k.name)}: ${k.keptBecause}`)];
+function formatStale(all, days, refs) {
+  const stale = all.filter((s) => !s.keptBecause);
+  const kept = all.filter((s) => s.keptBecause);
+  if (stale.length === 0) {
+    return [`No stale flags (same in every environment and unchanged for ${days}+ days).`, ...keptLines(kept)].join("\n");
+  }
   const lines = [`${stale.length} stale flag${stale.length === 1 ? "" : "s"}:`, ""];
   for (const s of stale) {
-    lines.push(`  ${s.name}: ${advice(s)} (${ageText(s.daysUnchanged)})`);
+    lines.push(`  ${safe(s.name)}: ${advice(s)} (${ageText(s.daysUnchanged)})`);
     if (refs) lines.push(`    used in: ${refsText(refs.get(s.name))}`);
   }
+  lines.push(...keptLines(kept));
   lines.push("", `Tag a flag "${PERMANENT_TAG}" in Flagsmith to leave it out (for example a kill switch).`);
   return lines.join("\n");
 }
-function formatStaleMarkdown(stale, days, refs) {
+var keptMarkdown = (kept) => kept.length === 0 ? [] : ["", "Same default everywhere, but not stale (keep them):", "", ...kept.map((k) => `- ${code(k.name)}: ${text(k.keptBecause ?? "")}`)];
+function formatStaleMarkdown(all, days, refs) {
+  const stale = all.filter((s) => !s.keptBecause);
+  const kept = all.filter((s) => s.keptBecause);
   const lines = ["## Stale flags", ""];
   if (stale.length === 0) {
-    lines.push(`No stale flags (same in every environment and unchanged for ${days}+ days).`);
+    lines.push(`No stale flags (same in every environment and unchanged for ${days}+ days).`, ...keptMarkdown(kept));
     return lines.join("\n") + "\n";
   }
   lines.push(
@@ -31419,8 +31436,9 @@ function formatStaleMarkdown(stale, days, refs) {
   for (const s of stale) {
     const setting2 = `${s.enabled ? "on" : "off"}${s.value === null ? "" : `, ${code(JSON.stringify(s.value))}`}`;
     const todo = s.enabled ? "Remove flag, keep the code it turns on" : "Remove flag and the code behind it";
-    lines.push(`| ${code(s.name)} | ${setting2} | ${s.daysUnchanged} days | ${todo} |${refs ? ` ${text(refsText(refs.get(s.name)))} |` : ""}`);
+    lines.push(`| ${code(s.name)} | ${setting2} | ${s.daysUnchanged} days | ${todo} |${refs ? ` ${code(refsText(refs.get(s.name)))} |` : ""}`);
   }
+  lines.push(...keptMarkdown(kept));
   lines.push("", `Tag a flag \`${PERMANENT_TAG}\` in Flagsmith to leave it out (for example a kill switch).`);
   return lines.join("\n") + "\n";
 }
@@ -31546,7 +31564,8 @@ function liveFromDocument(doc) {
   return live;
 }
 async function keySource(apiUrl, keys) {
-  const docs = await Promise.all(keys.map((k) => readEnvironmentDocument(apiUrl, k)));
+  const docs = [];
+  for (const k of keys) docs.push(await readEnvironmentDocument(apiUrl, k));
   const projects = new Set(docs.map((d) => d.project.id));
   if (projects.size > 1) {
     throw new Error(`The environment keys belong to different projects: ${[...new Set(docs.map((d) => d.project.name))].join(", ")}`);
@@ -31823,9 +31842,15 @@ program2.command("stale").description("List flags with the same setting in every
     fs2.listTags(project.id)
   ]);
   const statesByEnv = /* @__PURE__ */ new Map();
-  for (const env of environments) statesByEnv.set(env.name, await fs2.listEnvironmentStates(env.api_key));
-  const stale = findStaleFlags(features, statesByEnv, tags, days);
-  const refs = opts.code === false ? void 0 : await findReferences(opts.code, stale.map((s) => s.name), [opts.dir]);
+  const overrides = /* @__PURE__ */ new Map();
+  for (const env of environments) {
+    statesByEnv.set(env.name, await fs2.listEnvironmentStates(env.api_key));
+    for (const o of await fs2.listNonDefaultStates(env.id)) {
+      if (!overrides.has(o.feature)) overrides.set(o.feature, `${o.identity !== null ? "identity" : "segment"} override in ${env.name}`);
+    }
+  }
+  const stale = findStaleFlags(features, statesByEnv, tags, days, /* @__PURE__ */ new Date(), overrides);
+  const refs = opts.code === false ? void 0 : await findReferences(opts.code, stale.filter((s) => !s.keptBecause).map((s) => s.name), [opts.dir]);
   const output2 = opts.format === "markdown" ? formatStaleMarkdown(stale, days, refs) : formatStale(stale, days, refs);
   console.log(output2);
   if (opts.out) await (0, import_promises3.writeFile)(opts.out, output2, "utf8");

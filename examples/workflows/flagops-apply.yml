@@ -1,6 +1,10 @@
 # Copy to .github/workflows/ in the repo that holds your flag files.
 # On merge to main: applies non-production flags first, then waits for a
-# reviewer to approve before applying production.
+# reviewer to approve before applying production. The reviewer finds the exact Production
+# plan in the run's summary (written by the non-production job) before approving.
+#
+# Rejecting the production deployment leaves Git ahead of Production: revert the pull request,
+# or the next drift check reports the difference and the next approved apply makes the change.
 #
 # Only apply gets the admin key, and only through GitHub Environments limited to main,
 # so no pull request workflow can read it. Setup (Settings -> Environments):
@@ -37,6 +41,16 @@ jobs:
         with:
           command: apply
           environments: Development, Staging
+          api-url: ${{ vars.FLAGSMITH_API_URL }}
+          admin-key: ${{ secrets.FLAGSMITH_ADMIN_KEY }}
+      # What the production job will change, in this run's summary, so the reviewer sees it
+      # before approving. It includes any dashboard change in Production that apply would undo.
+      - name: Production plan for the reviewer
+        uses: Akash-016/flagops@e1b196f95aeb8b97fdbf1623e7ddd73faf0ae4cd # v1.1.5
+        with:
+          command: plan
+          environments: Production
+          comment: "false"
           api-url: ${{ vars.FLAGSMITH_API_URL }}
           admin-key: ${{ secrets.FLAGSMITH_ADMIN_KEY }}
 

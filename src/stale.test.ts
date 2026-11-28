@@ -68,7 +68,22 @@ describe("formatting", () => {
   it("makes a table in markdown", () => {
     const md = formatStaleMarkdown(stale, 30, refs);
     expect(md).toContain("**2 flags** have had the same setting");
-    expect(md).toContain("| <code>dark&#95;mode</code> | on | 60 days | Remove flag, keep the code it turns on | src/layout&#46;js&#58;10 |");
+    expect(md).toContain("| <code>dark&#95;mode</code> | on | 60 days | Remove flag, keep the code it turns on | <code>src/layout&#46;js&#58;10</code> |");
+  });
+
+  it("keeps flags that some users still see differently, and says why", () => {
+    const withOverride = findStaleFlags(features, states, [{ id: 7, label: "permanent" }], 30, now, new Map([[2, "segment override in Production"]]));
+    const legacy = withOverride.find((s) => s.name === "legacy_payments")!;
+    expect(legacy.keptBecause).toBe("segment override in Production");
+    const text = formatStale(withOverride, 30);
+    expect(text).toContain("1 stale flag:");
+    expect(text).not.toContain("legacy_payments: off everywhere");
+    expect(text).toContain("Same default everywhere, but not stale (keep them):\n  legacy_payments: segment override in Production");
+    const md = formatStaleMarkdown(withOverride, 30);
+    expect(md).toContain("**1 flag** have had");
+    expect(md).toContain("- <code>legacy&#95;payments</code>: segment override in Production");
+    const mv = findStaleFlags([{ ...features[0], type: "MULTIVARIATE" }], states, [], 30, now);
+    expect(mv[0].keptBecause).toContain("multivariate");
   });
 
   it("says so when nothing is stale", () => {

@@ -27136,8 +27136,10 @@ var flagSchema = external_exports.strictObject({
   ...f.segments ? { segments: f.segments } : {}
 }));
 var BAD_NAME = /[\x00-\x1f\x7f]/;
+var BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 function nameProblem(name) {
   if (name === "" || BAD_NAME.test(name)) return "flag names can't be empty or contain control characters";
+  if (BIDI.test(name)) return "flag names can't contain text-direction characters (they can make one name look like another)";
   if (EDGE_SPACE.test(name)) return "Flagsmith trims leading and trailing spaces from flag names; remove them";
   if ([...name].length > MAX_NAME) return `flag names can be at most ${MAX_NAME} characters`;
   return void 0;
@@ -27188,12 +27190,24 @@ async function postPlan(github, context, file2) {
   await github.rest.issues.createComment({ owner, repo, issue_number, body });
   return "created";
 }
-async function syncDriftIssue(github, context, log, file2, drift) {
+async function syncDriftIssue(github, context, log, file2, drift, failed = false) {
   const body = fitBody((0, import_node_fs.readFileSync)(file2, "utf8"), context);
   const { owner, repo } = context.repo;
   const open2 = await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: "open", per_page: 100 });
   const existing = open2.find((i) => !i.pull_request && ours(i, DRIFT_MARKER));
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+  if (failed && existing) {
+    await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body: `The latest drift check failed ([run](${runUrl})):
+
+${body.split("\n").slice(1).join("\n")}` });
+    log.info(`Drift check failed; commented on issue #${existing.number}`);
+    return "updated";
+  }
+  if (failed) {
+    const { data } = await github.rest.issues.create({ owner, repo, title: "Flag drift check failed", body });
+    log.info(`Drift check failed; opened issue #${data.number}`);
+    return "opened";
+  }
   if (drift && existing) {
     await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
     log.info(`Updated drift issue #${existing.number}`);

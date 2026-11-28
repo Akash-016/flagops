@@ -3,7 +3,7 @@
 
 import type { Feature, FeatureState, FlagValue, Tag } from "./flagsmith.js";
 import type { Reference } from "./references.js";
-import { code, text } from "./diff.js";
+import { code, safe, text } from "./diff.js";
 
 export const PERMANENT_TAG = "permanent";
 
@@ -13,17 +13,23 @@ export interface StaleFlag {
   value: FlagValue;
   lastChanged: Date;
   daysUnchanged: number;
+  // Same default everywhere, but some users still get something else: not stale. Listed so
+  // nobody removes it by looking at the defaults alone.
+  keptBecause?: string;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// statesByEnv: environment name -> that environment's flag states.
+// statesByEnv: environment name -> that environment's flag states (defaults).
+// overrides: feature id -> why some users get a different setting (a segment or identity
+// override somewhere). Multivariate flags are always kept: their variants still split users.
 export function findStaleFlags(
   features: Feature[],
   statesByEnv: Map<string, FeatureState[]>,
   tags: Tag[],
   days: number,
   now: Date = new Date(),
+  overrides: Map<number, string> = new Map(),
 ): StaleFlag[] {
   const permanentIds = new Set(tags.filter((t) => t.label.toLowerCase() === PERMANENT_TAG).map((t) => t.id));
   const stale: StaleFlag[] = [];
@@ -45,7 +51,8 @@ export function findStaleFlags(
     const daysUnchanged = Math.floor((now.getTime() - lastChanged.getTime()) / DAY_MS);
     if (daysUnchanged < days) continue;
 
-    stale.push({ name: f.name, enabled: first.enabled, value: first.feature_state_value ?? null, lastChanged, daysUnchanged });
+    const keptBecause = f.type === "MULTIVARIATE" ? "multivariate: its variants still split users" : overrides.get(f.id);
+    stale.push({ name: f.name, enabled: first.enabled, value: first.feature_state_value ?? null, lastChanged, daysUnchanged, ...(keptBecause ? { keptBecause } : {}) });
   }
   return stale.sort((a, b) => b.daysUnchanged - a.daysUnchanged || a.name.localeCompare(b.name));
 }
@@ -64,21 +71,36 @@ function refsText(refs: Reference[] | undefined, max = 5): string {
   return shown + (refs.length > max ? ` (+${refs.length - max} more)` : "");
 }
 
-export function formatStale(stale: StaleFlag[], days: number, refs?: Map<string, Reference[]>): string {
-  if (stale.length === 0) return `No stale flags (same in every environment and unchanged for ${days}+ days).`;
+const keptLines = (kept: StaleFlag[]) =>
+  kept.length === 0 ? [] : ["", "Same default everywhere, but not stale (keep them):", ...kept.map((k) => `  ${safe(k.name)}: ${k.keptBecause}`)];
+
+export function formatStale(all: StaleFlag[], days: number, refs?: Map<string, Reference[]>): string {
+  const stale = all.filter((s) => !s.keptBecause);
+  const kept = all.filter((s) => s.keptBecause);
+  if (stale.length === 0) {
+    return [`No stale flags (same in every environment and unchanged for ${days}+ days).`, ...keptLines(kept)].join("\n");
+  }
   const lines = [`${stale.length} stale flag${stale.length === 1 ? "" : "s"}:`, ""];
   for (const s of stale) {
-    lines.push(`  ${s.name}: ${advice(s)} (${ageText(s.daysUnchanged)})`);
+    lines.push(`  ${safe(s.name)}: ${advice(s)} (${ageText(s.daysUnchanged)})`);
     if (refs) lines.push(`    used in: ${refsText(refs.get(s.name))}`);
   }
+  lines.push(...keptLines(kept));
   lines.push("", `Tag a flag "${PERMANENT_TAG}" in Flagsmith to leave it out (for example a kill switch).`);
   return lines.join("\n");
 }
 
-export function formatStaleMarkdown(stale: StaleFlag[], days: number, refs?: Map<string, Reference[]>): string {
+const keptMarkdown = (kept: StaleFlag[]) =>
+  kept.length === 0
+    ? []
+    : ["", "Same default everywhere, but not stale (keep them):", "", ...kept.map((k) => `- ${code(k.name)}: ${text(k.keptBecause ?? "")}`)];
+
+export function formatStaleMarkdown(all: StaleFlag[], days: number, refs?: Map<string, Reference[]>): string {
+  const stale = all.filter((s) => !s.keptBecause);
+  const kept = all.filter((s) => s.keptBecause);
   const lines = ["## Stale flags", ""];
   if (stale.length === 0) {
-    lines.push(`No stale flags (same in every environment and unchanged for ${days}+ days).`);
+    lines.push(`No stale flags (same in every environment and unchanged for ${days}+ days).`, ...keptMarkdown(kept));
     return lines.join("\n") + "\n";
   }
   lines.push(
@@ -90,8 +112,9 @@ export function formatStaleMarkdown(stale: StaleFlag[], days: number, refs?: Map
   for (const s of stale) {
     const setting = `${s.enabled ? "on" : "off"}${s.value === null ? "" : `, ${code(JSON.stringify(s.value))}`}`;
     const todo = s.enabled ? "Remove flag, keep the code it turns on" : "Remove flag and the code behind it";
-    lines.push(`| ${code(s.name)} | ${setting} | ${s.daysUnchanged} days | ${todo} |${refs ? ` ${text(refsText(refs.get(s.name)))} |` : ""}`);
+    lines.push(`| ${code(s.name)} | ${setting} | ${s.daysUnchanged} days | ${todo} |${refs ? ` ${code(refsText(refs.get(s.name)))} |` : ""}`);
   }
+  lines.push(...keptMarkdown(kept));
   lines.push("", `Tag a flag \`${PERMANENT_TAG}\` in Flagsmith to leave it out (for example a kill switch).`);
   return lines.join("\n") + "\n";
 }

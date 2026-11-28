@@ -86,9 +86,11 @@ export const isArchived = (f: FlagEntry): boolean => f.archived === true;
 // Any name Flagsmith accepts and stores unchanged: no control characters, no leading or
 // trailing spaces (Flagsmith would trim them), at most 2000 characters.
 const BAD_NAME = /[\x00-\x1f\x7f]/;
+const BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 
 export function nameProblem(name: string): string | undefined {
   if (name === "" || BAD_NAME.test(name)) return "flag names can't be empty or contain control characters";
+  if (BIDI.test(name)) return "flag names can't contain text-direction characters (they can make one name look like another)";
   if (EDGE_SPACE.test(name)) return "Flagsmith trims leading and trailing spaces from flag names; remove them";
   if ([...name].length > MAX_NAME) return `flag names can be at most ${MAX_NAME} characters`;
   return undefined;

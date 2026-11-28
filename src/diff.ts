@@ -381,6 +381,20 @@ function describeDrift(c: Change): { git: string; live: string; what: string } {
   }
 }
 
+// When the drift check itself can't run (Flagsmith down, a key rejected, an environment renamed).
+export function driftFailedMarkdown(reason: string): string {
+  return [
+    DRIFT_MARKER,
+    "## Drift check failed",
+    "",
+    "The drift check couldn't compare Flagsmith with Git, so drift may be going unnoticed:",
+    "",
+    "<pre>" + text(reason) + "</pre>",
+    "",
+    "Fix the cause and run the check again. This issue closes itself once Flagsmith and Git match.",
+  ].join("\n") + "\n";
+}
+
 export function formatDriftMarkdown(plans: EnvironmentPlan[]): string {
   const total = countDrift(plans);
   const lines: string[] = [DRIFT_MARKER];

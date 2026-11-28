@@ -74,6 +74,7 @@ export async function syncDriftIssue(
   log: Log,
   file: string,
   drift: boolean,
+  failed = false,
 ): Promise<"opened" | "updated" | "closed" | "none"> {
   const body = fitBody(readFileSync(file, "utf8"), context);
   const { owner, repo } = context.repo;
@@ -81,6 +82,17 @@ export async function syncDriftIssue(
   const existing = open.find((i) => !i.pull_request && ours(i, DRIFT_MARKER));
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
 
+  if (failed && existing) {
+    // Keep the drift details already in the issue; say the latest check couldn't run.
+    await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body: `The latest drift check failed ([run](${runUrl})):\n\n${body.split("\n").slice(1).join("\n")}` });
+    log.info(`Drift check failed; commented on issue #${existing.number}`);
+    return "updated";
+  }
+  if (failed) {
+    const { data } = await github.rest.issues.create({ owner, repo, title: "Flag drift check failed", body });
+    log.info(`Drift check failed; opened issue #${data.number}`);
+    return "opened";
+  }
   if (drift && existing) {
     await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
     log.info(`Updated drift issue #${existing.number}`);

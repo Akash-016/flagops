@@ -96,13 +96,14 @@ runs:
           core.setOutput("comment", result);
 
     - name: Open, update or close the drift issue
-      if: inputs.command == 'drift' && inputs.issue == 'true'
+      if: always() && inputs.command == 'drift' && inputs.issue == 'true' && steps.run.outputs.report-file != ''
       uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
       env:
         REPORT_FILE: ${{ steps.run.outputs.report-file }}
         DRIFT: ${{ steps.run.outputs.drift }}
+        FAILED: ${{ steps.run.outputs.failed }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
           const steps = require(require("path").join(process.env.GITHUB_ACTION_PATH, "dist", "github.cjs"));
-          await steps.syncDriftIssue(github, context, core, process.env.REPORT_FILE, process.env.DRIFT === "true");
+          await steps.syncDriftIssue(github, context, core, process.env.REPORT_FILE, process.env.DRIFT === "true", process.env.FAILED === "true");

@@ -2,9 +2,9 @@
 // shell script so it runs the same on Linux, macOS and Windows runners.
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { guardOutput } from "./diff.js";
+import { driftFailedMarkdown, guardOutput } from "./diff.js";
 
 const input = (name: string) => (process.env[`INPUT_${name}`] ?? "").trim();
 
@@ -66,6 +66,11 @@ const status = result.status ?? 1;
 if (status !== 0 && !(command === "drift" && status === 2)) {
   // Show the reason on the run's summary page, not only in the log. Skip Node's own warnings.
   const reason = stderr.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith("(node:") && !l.startsWith("(Use `node"));
+  if (command === "drift") {
+    // A scheduled check that can't run must not fail silently: the issue step reports it.
+    writeFileSync(reportFile, driftFailedMarkdown(reason.join("\n") || `exit code ${status}`));
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `report-file=${reportFile}\nfailed=true\n`);
+  }
   fail(`flagops ${command} failed: ${(reason.join("\n") || `exit code ${status}`).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A")}`);
 }
 
