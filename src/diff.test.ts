@@ -12,6 +12,7 @@ import {
   formatPlanMarkdown,
   guardOutput,
   multivariateNote,
+  planFailedMarkdown,
   sortByEnvironment,
   type LiveFlags,
 } from "./diff.js";
@@ -223,6 +224,22 @@ describe("formatPlanMarkdown", () => {
     for (const name of ["Non-Prod", "nonprod", "Preprod", "Pre-Prod", "Product Sandbox", "Development"]) expect(md(name)).not.toContain("(production)");
     const order = sortByEnvironment(["Production", "Non-Prod", "Development", "Preprod"].map((environment) => ({ environment })));
     expect(order.map((p) => p.environment)).toEqual(["Development", "Non-Prod", "Preprod", "Production"]);
+  });
+
+  it("shortens very long values for reading, but compares the full value", () => {
+    const long = "x".repeat(20000);
+    const plan = diffEnvironment(wanted({ a: { enabled: true, value: long } }), live({ a: [true, long.slice(0, 19999) + "y"] }));
+    expect(plan.changes).toHaveLength(1);
+    const out = formatPlan([plan]);
+    expect(out.length).toBeLessThan(600);
+    expect(out).toContain("... (20000 characters)");
+  });
+
+  it("replaces the plan comment with a failure note when the plan can't run", () => {
+    const md = planFailedMarkdown("Flagsmith GET https://x/api/v1/environment-document/ failed: no answer in 30 s\nmore");
+    expect(md.startsWith(COMMENT_MARKER)).toBe(true);
+    expect(md).toContain("## FlagOps plan failed");
+    expect(md).not.toContain("more");
   });
 
   it("says so when there is nothing to change", () => {

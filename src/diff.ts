@@ -186,7 +186,16 @@ export function sortByEnvironment<T extends { environment: string }>(plans: T[])
   );
 }
 
-const show = (v: FlagValue) => (v === null ? "null" : JSON.stringify(v));
+// Long text is shortened for reading (plan, drift, comments); comparisons use the full value.
+const SHOW_MAX = 120;
+const show = (v: FlagValue) => {
+  if (v === null) return "null";
+  if (typeof v === "string" && [...v].length > SHOW_MAX) {
+    const chars = [...v];
+    return `${JSON.stringify(chars.slice(0, SHOW_MAX).join(""))}... (${chars.length} characters)`;
+  }
+  return JSON.stringify(v);
+};
 
 // Terminal and log output. Flag and environment names come from Flagsmith, where a name can
 // hold a newline; in a GitHub Actions log, a line starting with "::" is a workflow command.
@@ -379,6 +388,20 @@ function describeDrift(c: Change): { git: string; live: string; what: string } {
         ? { git: `override for segment ${code(c.segment)}`, live: "no such segment", what: "segment renamed or deleted outside Git" }
         : { git: `override for segment ${code(c.segment)}`, live: `${c.found} segments with this name`, what: "segment name no longer unique" };
   }
+}
+
+// When the plan itself can't run: replaces the previous plan comment on the pull request.
+export function planFailedMarkdown(reason: string): string {
+  return [
+    COMMENT_MARKER,
+    "## FlagOps plan failed",
+    "",
+    "The plan for the latest commit couldn't be made, so an earlier plan on this pull request may be out of date:",
+    "",
+    "<pre>" + text(reason.split("\n")[0].slice(0, 200)) + "</pre>",
+    "",
+    "The full message is in the run log. Fix the cause and push again.",
+  ].join("\n") + "\n";
 }
 
 // When the drift check itself can't run (Flagsmith down, a key rejected, an environment renamed).

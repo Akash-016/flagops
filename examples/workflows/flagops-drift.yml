@@ -26,6 +26,7 @@ permissions:
 jobs:
   drift:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       # With read-only keys, the moving v1 tag (fixes arrive automatically) is a fair trade.

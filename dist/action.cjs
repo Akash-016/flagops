@@ -27160,10 +27160,23 @@ var MAX_FILE_BYTES = 1024 * 1024;
 
 // src/diff.ts
 var guardOutput = (s) => s.replace(/\r(?!\n)/g, "\\r").replace(/^(\s*)::/gm, "$1: :").replace(/##\[/g, "## [");
+var COMMENT_MARKER = "<!-- flagops-plan -->";
 function text(s) {
   return s.replace(/[^A-Za-z0-9 ,/=?+%-]/gu, (c) => `&#${c.codePointAt(0)};${c === "@" ? "<wbr>" : ""}`);
 }
 var DRIFT_MARKER = "<!-- flagops-drift -->";
+function planFailedMarkdown(reason) {
+  return [
+    COMMENT_MARKER,
+    "## FlagOps plan failed",
+    "",
+    "The plan for the latest commit couldn't be made, so an earlier plan on this pull request may be out of date:",
+    "",
+    "<pre>" + text(reason.split("\n")[0].slice(0, 200)) + "</pre>",
+    "",
+    "The full message is in the run log. Fix the cause and push again."
+  ].join("\n") + "\n";
+}
 function driftFailedMarkdown(reason) {
   return [
     DRIFT_MARKER,
@@ -27244,8 +27257,9 @@ if (stderr) process.stderr.write(guardOutput(stderr) + "\n");
 var status = result.status ?? 1;
 if (status !== 0 && !(command === "drift" && status === 2)) {
   const reason = stderr.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith("(node:") && !l.startsWith("(Use `node"));
-  if (command === "drift") {
-    (0, import_node_fs.writeFileSync)(reportFile, driftFailedMarkdown(reason.join("\n") || `exit code ${status}`));
+  if (command === "drift" || command === "plan") {
+    const why = reason.join("\n") || `exit code ${status}`;
+    (0, import_node_fs.writeFileSync)(reportFile, command === "drift" ? driftFailedMarkdown(why) : planFailedMarkdown(why));
     if (process.env.GITHUB_OUTPUT) (0, import_node_fs.appendFileSync)(process.env.GITHUB_OUTPUT, `report-file=${reportFile}
 failed=true
 `);

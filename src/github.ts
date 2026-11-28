@@ -45,20 +45,26 @@ interface Authored {
   id: number;
   number?: number;
   body?: string | null;
-  user?: { type?: string } | null;
+  user?: { login?: string; type?: string } | null;
   pull_request?: unknown;
 }
 
-// Only a bot's own comment or issue counts: anyone can write one that starts with the marker.
-const ours = (item: Authored, marker: string) => item.user?.type === "Bot" && Boolean(item.body?.startsWith(marker));
+// The login FlagOps posts as: GITHUB_TOKEN posts as github-actions[bot]; a GitHub App token
+// posts as "<app>[bot]" (the bot-login input).
+export const DEFAULT_BOT = "github-actions[bot]";
+
+// Only FlagOps's own comment or issue counts: anyone, another bot included, can write one that
+// starts with the marker.
+const ours = (item: Authored, marker: string, bot: string) =>
+  item.user?.type === "Bot" && item.user?.login === bot && Boolean(item.body?.startsWith(marker));
 
 // Posts the plan as one comment on the pull request, and updates that comment on later runs.
-export async function postPlan(github: GitHub, context: Context, file: string): Promise<"created" | "updated"> {
+export async function postPlan(github: GitHub, context: Context, file: string, bot = DEFAULT_BOT): Promise<"created" | "updated"> {
   const body = fitBody(readFileSync(file, "utf8"), context);
   const { owner, repo } = context.repo;
   const issue_number = context.issue.number;
   const comments = await github.paginate<Authored>(github.rest.issues.listComments, { owner, repo, issue_number });
-  const mine = comments.find((c) => ours(c, COMMENT_MARKER));
+  const mine = comments.find((c) => ours(c, COMMENT_MARKER, bot));
   if (mine) {
     await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
     return "updated";
@@ -75,11 +81,12 @@ export async function syncDriftIssue(
   file: string,
   drift: boolean,
   failed = false,
+  bot = DEFAULT_BOT,
 ): Promise<"opened" | "updated" | "closed" | "none"> {
   const body = fitBody(readFileSync(file, "utf8"), context);
   const { owner, repo } = context.repo;
   const open = await github.paginate<Authored>(github.rest.issues.listForRepo, { owner, repo, state: "open", per_page: 100 });
-  const existing = open.find((i) => !i.pull_request && ours(i, DRIFT_MARKER));
+  const existing = open.find((i) => !i.pull_request && ours(i, DRIFT_MARKER, bot));
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
 
   if (failed && existing) {

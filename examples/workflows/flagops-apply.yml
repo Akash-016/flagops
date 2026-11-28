@@ -37,6 +37,7 @@ permissions:
 jobs:
   apply-non-production:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: non-production
     # One group per job, so non-production never waits behind an earlier run's
     # production approval. A newer pending run replaces an older one; it applies
@@ -64,6 +65,7 @@ jobs:
   apply-production:
     needs: apply-non-production
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: production # waits here for a required reviewer
     concurrency: flagops-apply-production
     steps:
