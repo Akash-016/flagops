@@ -44,7 +44,7 @@ jobs:
     concurrency: flagops-apply-non-production
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: Akash-016/flagops@c6aacd716507bf07fa93a02587d6ebf8634dac07 # v1.2.0: pinned, since this job holds the admin key
+      - uses: Akash-016/flagops@53d1481d00074a05b04efb541cd9f59da4cfd21e # v1.3.0: pinned, since this job holds the admin key
         with:
           command: apply
           skip-environments: Production # every other environment, including any you add later
@@ -53,7 +53,7 @@ jobs:
       # What the production job will change, in this run's summary, so the reviewer sees it
       # before approving. It includes any dashboard change in Production that apply would undo.
       - name: Production plan for the reviewer
-        uses: Akash-016/flagops@c6aacd716507bf07fa93a02587d6ebf8634dac07 # v1.2.0
+        uses: Akash-016/flagops@53d1481d00074a05b04efb541cd9f59da4cfd21e # v1.3.0
         with:
           command: plan
           environments: Production
@@ -68,7 +68,7 @@ jobs:
     concurrency: flagops-apply-production
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: Akash-016/flagops@c6aacd716507bf07fa93a02587d6ebf8634dac07 # v1.2.0: pinned, since this job holds the admin key
+      - uses: Akash-016/flagops@53d1481d00074a05b04efb541cd9f59da4cfd21e # v1.3.0: pinned, since this job holds the admin key
         with:
           command: apply
           environments: Production
