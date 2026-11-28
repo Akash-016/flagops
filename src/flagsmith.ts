@@ -122,7 +122,9 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<Response>
       }
     } catch (err) {
       if (method !== "GET" || attempt === 3) {
-        const reason = (err as Error).name === "TimeoutError" ? `no answer in ${TIMEOUT_MS / 1000} s` : (err as Error).message;
+        const e = err as Error & { cause?: { message?: string; code?: string } };
+        const cause = e.cause?.code ?? e.cause?.message;
+        const reason = e.name === "TimeoutError" ? `no answer in ${TIMEOUT_MS / 1000} s` : cause ? `${e.message} (${cause})` : e.message;
         throw new Error(`Flagsmith ${method} ${url} failed: ${reason}`);
       }
     }
@@ -154,7 +156,7 @@ export async function readEnvironmentDocument(apiUrl: string, serverKey: string)
   const res = await fetchWithRetry(`${apiUrl}/environment-document/`, { headers: { "X-Environment-Key": serverKey } });
   if (res.status === 401 || res.status === 403) {
     throw new Error(
-      `Flagsmith rejected an environment key starting "${serverKey.slice(0, 4)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`,
+      `Flagsmith rejected one of the environment keys. ${serverKey.startsWith("ser.") ? "Check that it is current and belongs to this Flagsmith" : "Use a server-side key (starts with \"ser.\")"}: Environment settings -> SDK Keys.`,
     );
   }
   if (!res.ok) throw new Error(`Flagsmith GET ${apiUrl}/environment-document/ failed: ${res.status} ${await errorBody(res)}`);

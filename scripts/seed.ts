@@ -98,4 +98,32 @@ for (const flag of allFlags.filter((f) => PERMANENT_FLAGS.includes(f.name))) {
   }
 }
 console.log(`Tagged as permanent: ${PERMANENT_FLAGS.join(", ")}`);
+
+// Two segments, and one segment override, so a first "flagops pull" shows how overrides look.
+// Segments are matched on a trait, e.g. identify a user with trait plan=beta_testers.
+const SEGMENTS = ["beta_testers", "staff"];
+const segments = await list<{ id: number; name: string }>(`/projects/${project.id}/segments/`);
+for (const name of SEGMENTS) {
+  if (segments.some((sg) => sg.name === name)) continue;
+  segments.push(
+    await api("POST", `/projects/${project.id}/segments/`, {
+      name,
+      project: project.id,
+      rules: [{ type: "ALL", rules: [{ type: "ANY", rules: [], conditions: [{ operator: "EQUAL", property: "plan", value: name }] }], conditions: [] }],
+    }),
+  );
+}
+// Production: beta testers get new_search; everyone else keeps it off.
+const production = envs[2] as { id: number; api_key: string };
+const newSearch = allFlags.find((f) => f.name === "new_search")!;
+const beta = segments.find((sg) => sg.name === "beta_testers")!;
+const overrides = await list<{ id: number; segment: number }>(`/features/feature-segments/?environment=${production.id}&feature=${newSearch.id}`);
+if (!overrides.some((o) => o.segment === beta.id)) {
+  await api("POST", `/environments/${production.api_key}/features/${newSearch.id}/create-segment-override/`, {
+    enabled: true,
+    feature_state_value: { type: "unicode", string_value: null },
+    feature_segment: { segment: beta.id },
+  });
+}
+console.log(`Segments: ${SEGMENTS.join(", ")}; Production override: new_search on for beta_testers`);
 console.log("Done. Try: flagops pull");

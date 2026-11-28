@@ -10943,7 +10943,7 @@ var program = new Command();
 
 // src/config.ts
 var import_dotenv = __toESM(require_dist(), 1);
-(0, import_dotenv.config)({ path: [".env", "../.env"], quiet: true });
+if (!process.env.GITHUB_ACTIONS) (0, import_dotenv.config)({ path: [".env", "../.env"], quiet: true });
 function getApiUrl() {
   return (process.env.FLAGSMITH_API_URL || "http://localhost:8000/api/v1").replace(/\/+$/, "");
 }
@@ -10986,7 +10986,9 @@ async function fetchWithRetry(url2, init) {
       }
     } catch (err) {
       if (method !== "GET" || attempt === 3) {
-        const reason = err.name === "TimeoutError" ? `no answer in ${TIMEOUT_MS / 1e3} s` : err.message;
+        const e = err;
+        const cause = e.cause?.code ?? e.cause?.message;
+        const reason = e.name === "TimeoutError" ? `no answer in ${TIMEOUT_MS / 1e3} s` : cause ? `${e.message} (${cause})` : e.message;
         throw new Error(`Flagsmith ${method} ${url2} failed: ${reason}`);
       }
     }
@@ -11008,7 +11010,7 @@ async function readEnvironmentDocument(apiUrl, serverKey) {
   const res = await fetchWithRetry(`${apiUrl}/environment-document/`, { headers: { "X-Environment-Key": serverKey } });
   if (res.status === 401 || res.status === 403) {
     throw new Error(
-      `Flagsmith rejected an environment key starting "${serverKey.slice(0, 4)}". Use a server-side key (starts with "ser."): Environment settings -> SDK Keys.`
+      `Flagsmith rejected one of the environment keys. ${serverKey.startsWith("ser.") ? "Check that it is current and belongs to this Flagsmith" : 'Use a server-side key (starts with "ser.")'}: Environment settings -> SDK Keys.`
     );
   }
   if (!res.ok) throw new Error(`Flagsmith GET ${apiUrl}/environment-document/ failed: ${res.status} ${await errorBody(res)}`);
@@ -31234,6 +31236,9 @@ function planRow(c) {
       return `| ! | ${code(c.flag)} for segment ${code(c.segment)} | ${c.found === 0 ? "no such segment in Flagsmith" : `${c.found} segments with this name`} | apply leaves this flag's overrides alone until fixed |`;
   }
 }
+function multivariateNote(flags) {
+  return `Multivariate: ${flags.map(code).join(", ")}. FlagOps sets the control value; the variant weights stay as set in Flagsmith, so some users get a variant instead.`;
+}
 function formatPlanMarkdown(plans, refs, notes = []) {
   const actions = countActions(plans);
   const lines = [COMMENT_MARKER, "## FlagOps plan", ""];
@@ -31243,7 +31248,7 @@ function formatPlanMarkdown(plans, refs, notes = []) {
     lines.push("", changed.map((p) => `${code(p.environment)}: ${p.changes.filter(isAction).length}`).join(" \xB7 "));
   }
   for (const note of notes) lines.push("", `> ${note}`);
-  for (const p of plans) {
+  for (const p of [...plans].reverse()) {
     if (p.changes.length === 0) continue;
     const isProd = productionNames.includes(p.environment.toLowerCase());
     lines.push("", `### ${code(p.environment)}${isProd ? " (production)" : ""}`, "");
@@ -31278,7 +31283,7 @@ function describeDrift(c) {
       const seg = ` for segment ${code(c.segment)}`;
       if (!c.before) return { git: `${both(c.after)}${seg}`, live: "missing", what: "override deleted outside Git" };
       if (!c.after) return { git: "(not in Git)", live: `${both(c.before)}${seg}`, what: "override added outside Git" };
-      return { git: `${both(c.after)}${seg}`, live: both(c.before), what: "override changed outside Git" };
+      return { git: `${both(c.after)}${seg}`, live: `${both(c.before)}${seg}`, what: "override changed outside Git" };
     }
     case "order":
       return { git: `segments ${c.after.map(code).join(", ")}`, live: `segments ${c.before.map(code).join(", ")}`, what: "segment order changed outside Git" };
@@ -31300,7 +31305,7 @@ function formatDriftMarkdown(plans) {
   );
   const drifted = plans.filter((p) => p.changes.length > 0);
   if (drifted.length > 1) lines.push("", drifted.map((p) => `${code(p.environment)}: ${p.changes.length}`).join(" \xB7 "));
-  for (const p of drifted) {
+  for (const p of [...drifted].reverse()) {
     lines.push("", `### ${code(p.environment)}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
     for (const c of p.changes) {
       const d = describeDrift(c);
@@ -31780,11 +31785,11 @@ program2.command("plan").description("Show what apply would change, without chan
   const source = await readSource(opts.project);
   const plans = await buildPlans(source, opts.dir, opts.env);
   const refs = opts.code === false ? void 0 : await findReferences(opts.code, changedFlags(plans), [opts.dir]);
-  const notes = source.archived ? [] : ["Planned with read-only keys, which can't see whether a flag is archived. Apply checks that with the admin key and stops, changing nothing, if YAML and Flagsmith disagree."];
+  const notes = source.archived ? [] : ["Planned with read-only keys, which can't see whether a flag is archived or an environment uses feature versioning (v2). Apply checks both with the admin key and stops, changing nothing, if needed."];
   const changed = new Set(changedFlags(plans));
   const mv = [...new Set(plans.flatMap((p) => [...p.multivariate].filter((f) => changed.has(f))))].sort();
   if (mv.length > 0) {
-    notes.push(`Multivariate: ${mv.join(", ")}. FlagOps sets the control value; the variant weights stay as set in Flagsmith, so some users get a variant instead.`);
+    notes.push(multivariateNote(mv));
   }
   const output2 = opts.format === "markdown" ? formatPlanMarkdown(plans, refs, notes) : formatPlan(plans, refs);
   console.log(output2);

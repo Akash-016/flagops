@@ -35,7 +35,7 @@ The [demo repo](https://github.com/Akash-016/flagops-demo) runs FlagOps against 
 - [Pull request turning on a flag in production](https://github.com/Akash-016/flagops-demo/pull/3), with the plan comment.
 - [The apply run](https://github.com/Akash-016/flagops-demo/actions/runs/45822896350) for that merge. Development and Staging updated at once, and Production waited for approval.
 - [A drift issue](https://github.com/Akash-016/flagops-demo/issues/2) FlagOps opened after a dashboard edit, and closed by itself once Git and Flagsmith matched again.
-- Segment overrides: [a pull request giving beta testers the new search in Production](https://github.com/Akash-016/flagops-demo/pull/8), [its apply run](https://github.com/Akash-016/flagops-demo/actions/runs/46086054326) with the Production approval, and [the drift issue](https://github.com/Akash-016/flagops-demo/issues/9) opened when the override was turned off outside Git, closed by itself after `flagops apply` put it back.
+- Segment overrides: [a pull request giving beta testers the new search in Production](https://github.com/Akash-016/flagops-demo/pull/8), [its apply run](https://github.com/Akash-016/flagops-demo/actions/runs/46086054326), where Production waited in its own job (the demo has one maintainer, so the owner released it as admin; see the demo README), and [the drift issue](https://github.com/Akash-016/flagops-demo/issues/9) opened when the override was turned off outside Git, closed by itself after `flagops apply` put it back.
 - [CI](https://github.com/Akash-016/flagops/actions/workflows/ci.yml) runs a full round trip against Flagsmith in Docker on every push.
 
 ## Quick start
@@ -59,7 +59,7 @@ FLAGSMITH_API_URL=http://localhost:8000/api/v1
 FLAGSMITH_ADMIN_KEY=your-key
 ```
 
-**3. Optional: load demo data** (3 environments, 7 sample flags)
+**3. Optional: load demo data** (3 environments, 7 sample flags, 2 segments and a segment override)
 
 ```bash
 npm install
@@ -103,8 +103,8 @@ FlagOps talks to the **Flagsmith Admin API** of a self-hosted instance, authenti
 | `GET /environments/<key>/featurestates/` | pull, plan, drift, stale | Each flag's on/off, value and last change, per environment |
 | `PATCH /environments/<key>/featurestates/<id>/` | apply | Change a flag's on/off and value |
 | `POST /projects/<id>/features/` | apply | Create a flag that's new in YAML |
-| `GET /projects/<id>/segments/` | plan, apply | Find segments by name |
-| `GET /features/featurestates/?environment=<id>` | pull, plan, drift | Segment override settings |
+| `GET /projects/<id>/segments/` | pull, plan, drift, apply | Find segments by name |
+| `GET /features/featurestates/?environment=<id>` | pull, plan, drift, apply | Segment override settings |
 | `GET /features/feature-segments/?environment=<id>&feature=<id>` | pull, plan, drift, apply | Which segment each override is for, and its priority |
 | `POST /environments/<key>/features/<id>/create-segment-override/` | apply | Add a segment override |
 | `PATCH /features/featurestates/<id>/` | apply | Change a segment override |
@@ -239,7 +239,7 @@ FlagOps makes Git the record of every flag change, and makes production changes 
 ## Limits
 
 - Segment rules, identity overrides and multivariate weights are not managed. For a multivariate flag FlagOps sets the control value, and the plan comment says that the variant weights still apply.
-- Environments that use feature versioning (v2) can be planned and checked for drift, but `apply` stops before changing anything there.
+- Environments that use feature versioning (v2) can be planned and checked for drift, but if a run would change one, `apply` stops before changing anything in any environment.
 - An override and its order are separate calls, so if `apply` stops halfway, a new override can briefly sit at the end of the list. Run `apply` again.
 - `apply` never deletes flags. Flags removed from YAML are reported as "left alone".
 - `apply` stops at the first failed change and lists what it did; there is no rollback. Run it again after fixing the cause.
@@ -257,6 +257,9 @@ Change requests and audit logs aren't in the open-source build; they come with F
 
 **Why not Terraform?**
 Flagsmith has an official Terraform provider, and it's a good choice if you already run Terraform. FlagOps aims at teams that don't: `flagops pull` writes YAML from the flags you already have, with no import step and no state file to store and lock. The plan appears as a pull request comment and shows where each flag is used in your code. Drift and stale-flag reports are built in.
+
+**How is this different from Flagsmith's Code References?**
+[Code References](https://docs.flagsmith.com/managing-flags/code-references) shows, in the Flagsmith dashboard, where each flag is used. FlagOps uses the same idea for a different moment: in the pull request that changes a flag, before anything changes, next to the plan and the reviewer who approves it.
 
 **What about segments and per-user overrides?**
 Segment overrides are managed (see [YAML format](#yaml-format)). Segment rules and per-user overrides are left to Flagsmith. See [Limits](#limits).

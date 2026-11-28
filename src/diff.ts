@@ -293,7 +293,12 @@ function planRow(c: Change): string {
   }
 }
 
-// notes: extra lines under the headline, such as what a read-only plan can't check.
+// A plan note for changed multivariate flags. Names are escaped: notes are Markdown.
+export function multivariateNote(flags: string[]): string {
+  return `Multivariate: ${flags.map(code).join(", ")}. FlagOps sets the control value; the variant weights stay as set in Flagsmith, so some users get a variant instead.`;
+}
+
+// notes: extra lines under the headline (Markdown), such as what a read-only plan can't check.
 export function formatPlanMarkdown(plans: EnvironmentPlan[], refs?: Map<string, Reference[]>, notes: string[] = []): string {
   const actions = countActions(plans);
   const lines: string[] = [COMMENT_MARKER, "## FlagOps plan", ""];
@@ -305,7 +310,8 @@ export function formatPlanMarkdown(plans: EnvironmentPlan[], refs?: Map<string, 
   }
   for (const note of notes) lines.push("", `> ${note}`);
 
-  for (const p of plans) {
+  // Production first: GitHub limits comment size, and a cut drops the end.
+  for (const p of [...plans].reverse()) {
     if (p.changes.length === 0) continue;
     const isProd = productionNames.includes(p.environment.toLowerCase());
     lines.push("", `### ${code(p.environment)}${isProd ? " (production)" : ""}`, "");
@@ -349,7 +355,7 @@ function describeDrift(c: Change): { git: string; live: string; what: string } {
       const seg = ` for segment ${code(c.segment)}`;
       if (!c.before) return { git: `${both(c.after!)}${seg}`, live: "missing", what: "override deleted outside Git" };
       if (!c.after) return { git: "(not in Git)", live: `${both(c.before)}${seg}`, what: "override added outside Git" };
-      return { git: `${both(c.after)}${seg}`, live: both(c.before), what: "override changed outside Git" };
+      return { git: `${both(c.after)}${seg}`, live: `${both(c.before)}${seg}`, what: "override changed outside Git" };
     }
     case "order":
       return { git: `segments ${c.after.map(code).join(", ")}`, live: `segments ${c.before.map(code).join(", ")}`, what: "segment order changed outside Git" };
@@ -375,7 +381,7 @@ export function formatDriftMarkdown(plans: EnvironmentPlan[]): string {
   );
   const drifted = plans.filter((p) => p.changes.length > 0);
   if (drifted.length > 1) lines.push("", drifted.map((p) => `${code(p.environment)}: ${p.changes.length}`).join(" · "));
-  for (const p of drifted) {
+  for (const p of [...drifted].reverse()) {
     lines.push("", `### ${code(p.environment)}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
     for (const c of p.changes) {
       const d = describeDrift(c);

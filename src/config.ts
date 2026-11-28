@@ -1,7 +1,9 @@
 import { config as loadEnv } from "dotenv";
 
-// Look for .env in the current folder first, then one level up.
-loadEnv({ path: [".env", "../.env"], quiet: true });
+// Locally, look for .env in the current folder first, then one level up. Not in GitHub Actions:
+// there the settings come from the workflow, and a .env merged into the flags repo must not
+// be able to change them (for example which project apply targets).
+if (!process.env.GITHUB_ACTIONS) loadEnv({ path: [".env", "../.env"], quiet: true });
 
 export interface Config {
   apiUrl: string;

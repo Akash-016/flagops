@@ -11,6 +11,7 @@ import {
   formatPlan,
   formatPlanMarkdown,
   guardOutput,
+  multivariateNote,
   sortByEnvironment,
   type LiveFlags,
 } from "./diff.js";
@@ -178,6 +179,21 @@ describe("formatPlanMarkdown", () => {
     expect(plan.changes).toMatchObject([{ kind: "archived", flag: "old" }]);
     expect(countActions([plan])).toBe(0);
     expect(countDrift([plan])).toBe(1);
+  });
+
+  it("escapes flag names in the multivariate note", () => {
+    const note = multivariateNote(["mv @octocat [x](https://evil.example) <img src=x> **b**"]);
+    for (const bad of ["@octocat", "[x]", "https:", "<img", "**b"]) expect(note).not.toContain(bad);
+    expect(note).toContain("<code>mv &#64;<wbr>octocat");
+  });
+
+  it("lists production first, so a comment cut short loses other environments' rows", () => {
+    const dev = { ...diffEnvironment(wanted({ a: { enabled: true, value: null } }), live({ a: [false, null] })), environment: "Development" };
+    const prod = diffEnvironment(wanted({ a: { enabled: true, value: null } }), live({ a: [false, null] }));
+    const md = formatPlanMarkdown([dev, prod]);
+    expect(md.indexOf("### <code>Production</code>")).toBeLessThan(md.indexOf("### <code>Development</code>"));
+    const drift = formatDriftMarkdown([dev, prod]);
+    expect(drift.indexOf("### <code>Production</code>")).toBeLessThan(drift.indexOf("### <code>Development</code>"));
   });
 
   it("says so when there is nothing to change", () => {

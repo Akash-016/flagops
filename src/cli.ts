@@ -8,6 +8,7 @@ import { buildFlagFile, fileNameFor, flagFileSchema, toYaml, type FlagFile } fro
 import { createInterface } from "node:readline/promises";
 import {
   archiveConflicts,
+  multivariateNote,
   segmentProblems,
   changedFlags,
   guardOutput,
@@ -181,11 +182,11 @@ program
     const refs = opts.code === false ? undefined : await findReferences(opts.code, changedFlags(plans), [opts.dir]);
     const notes = source.archived
       ? []
-      : ["Planned with read-only keys, which can't see whether a flag is archived. Apply checks that with the admin key and stops, changing nothing, if YAML and Flagsmith disagree."];
+      : ["Planned with read-only keys, which can't see whether a flag is archived or an environment uses feature versioning (v2). Apply checks both with the admin key and stops, changing nothing, if needed."];
     const changed = new Set(changedFlags(plans));
     const mv = [...new Set(plans.flatMap((p) => [...p.multivariate].filter((f) => changed.has(f))))].sort();
     if (mv.length > 0) {
-      notes.push(`Multivariate: ${mv.join(", ")}. FlagOps sets the control value; the variant weights stay as set in Flagsmith, so some users get a variant instead.`);
+      notes.push(multivariateNote(mv));
     }
     const output = opts.format === "markdown" ? formatPlanMarkdown(plans, refs, notes) : formatPlan(plans, refs);
     console.log(output);

@@ -176,11 +176,8 @@ jobs:
             -d '{"is_archived": true}' "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/features/$legacy/" > /dev/null
           expect_exit 0 $cli drift
 
-          echo "--- segment overrides from YAML: add, then reorder, then remove"
-          for s in beta_testers staff; do
-            curl -sf -X POST -H "$auth" -H "Content-Type: application/json" "$FLAGSMITH_API_URL/projects/$FLAGSMITH_PROJECT/segments/" \
-              -d "{\"name\":\"$s\",\"project\":$FLAGSMITH_PROJECT,\"rules\":[{\"type\":\"ALL\",\"rules\":[{\"type\":\"ANY\",\"rules\":[],\"conditions\":[{\"operator\":\"EQUAL\",\"property\":\"plan\",\"value\":\"$s\"}]}],\"conditions\":[]}]}" > /dev/null
-          done
+          echo "--- segment overrides from YAML: add, then reorder, then remove (the seed made beta_testers and staff)"
+          grep -A8 "  new_search:" flags/production.yaml | grep -q "segment: beta_testers" # the seeded override, pulled
           segments() { # segments <json list>: set dark_mode's overrides in production.yaml
             node -e 'const fs=require("fs"),Y=require(process.env.GITHUB_WORKSPACE+"/node_modules/yaml");const f="flags/production.yaml",y=Y.parse(fs.readFileSync(f,"utf8"));y.flags.dark_mode.segments=JSON.parse(process.argv[1]);fs.writeFileSync(f,Y.stringify(y))' "$1"
           }
