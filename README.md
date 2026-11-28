@@ -86,7 +86,17 @@ npx github:Akash-016/flagops init                         # writes the four work
 npx github:Akash-016/flagops init --production "Prod EU"  # if production has another name (or --dir for another folder)
 ```
 
-`init` writes the [example workflows](examples/workflows), adjusted to your folder and production name, and prints the steps below with links to your repository's settings pages. Then:
+`init` writes the [example workflows](examples/workflows), adjusted to your folder and production name, and prints the steps below with links to your repository's settings pages.
+
+**Or let FlagOps do the GitHub settings** with the [GitHub CLI](https://cli.github.com) (`gh auth login` first, with admin rights on the repo):
+
+```bash
+npx github:Akash-016/flagops setup-github --create-keys --reviewer your-teammate
+```
+
+It shows its plan and asks before changing anything. It creates the read-only keys in Flagsmith (`--create-keys`), then sets the variable, both secrets, both environments limited to `main`, the production reviewers with self-review blocked, and the ruleset on `main`. Running it again updates the same settings instead of adding copies. It turns off admin bypass only when someone other than you can approve, so a single maintainer is never locked out of Production. Left for you: a `CODEOWNERS` file and the first `flagops pull`.
+
+Or do it by hand:
 
 - [ ] **Read-only keys.** In Flagsmith, create a server-side key for each environment (Environment settings → SDK Keys → Server-side). These can read flags but not change them.
 - [ ] **Variable and secret.** Settings → Secrets and variables → Actions: add the variable `FLAGSMITH_API_URL` and the secret `FLAGSMITH_ENVIRONMENT_KEYS` (the server-side keys, separated by spaces). `plan` and `drift` use these.
@@ -125,6 +135,7 @@ With read-only keys, segment overrides and their priorities come from the enviro
 
 | Command | What it does |
 |---|---|
+| `flagops setup-github` | Set the GitHub side through the `gh` CLI: variable, secrets, environments, reviewers, ruleset (`--create-keys`, `--reviewer`, `--approvals`, `--yes`) |
 | `flagops init` | Write the four GitHub workflows into `.github/workflows/` and list the setup steps left (`--production`, `--dir`, `--force`) |
 | `flagops validate` | Check the flag files without connecting to Flagsmith: schema, one file per environment, same flags in every file |
 | `flagops check` | Test the connection and list projects |

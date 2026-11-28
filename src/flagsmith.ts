@@ -243,6 +243,15 @@ export class FlagsmithClient {
     return states.find((s) => s.feature === featureId && s.identity === null && s.feature_segment === null);
   }
 
+  // A read-only server-side key for one environment (what plan and drift use in CI).
+  async createServerKey(envApiKey: string, name: string): Promise<string> {
+    const created = await this.request<{ key: string }>(`${this.apiUrl}/environments/${envApiKey}/api-keys/`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    return created.key;
+  }
+
   // --- Segment overrides. Checked against Flagsmith 2.295.
 
   listSegments(projectId: number): Promise<Segment[]> {
