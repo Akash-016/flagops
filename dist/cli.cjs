@@ -31140,6 +31140,12 @@ function environmentRank(name) {
   if (n.includes("stag") || n.includes("qa") || n.includes("test") || n.includes("uat")) return 1;
   return 0;
 }
+var isProduction = (name) => environmentRank(name) === 2;
+function productionFirst(plans) {
+  return [...plans].sort(
+    (a, b) => environmentRank(b.environment) - environmentRank(a.environment) || a.environment.localeCompare(b.environment)
+  );
+}
 function sortByEnvironment(plans) {
   return [...plans].sort(
     (a, b) => environmentRank(a.environment) - environmentRank(b.environment) || a.environment.localeCompare(b.environment)
@@ -31212,7 +31218,6 @@ function referencesMarkdown(plans, refs) {
   }
   return lines;
 }
-var productionNames = ["production"];
 function planRow(c) {
   switch (c.kind) {
     case "update":
@@ -31248,9 +31253,9 @@ function formatPlanMarkdown(plans, refs, notes = []) {
     lines.push("", changed.map((p) => `${code(p.environment)}: ${p.changes.filter(isAction).length}`).join(" \xB7 "));
   }
   for (const note of notes) lines.push("", `> ${note}`);
-  for (const p of [...plans].reverse()) {
+  for (const p of productionFirst(plans)) {
     if (p.changes.length === 0) continue;
-    const isProd = productionNames.includes(p.environment.toLowerCase());
+    const isProd = isProduction(p.environment);
     lines.push("", `### ${code(p.environment)}${isProd ? " (production)" : ""}`, "");
     if (isProd && p.changes.some(isAction)) {
       lines.push("> [!WARNING]", "> Changes production. A reviewer must approve before they apply.", "");
@@ -31305,7 +31310,7 @@ function formatDriftMarkdown(plans) {
   );
   const drifted = plans.filter((p) => p.changes.length > 0);
   if (drifted.length > 1) lines.push("", drifted.map((p) => `${code(p.environment)}: ${p.changes.length}`).join(" \xB7 "));
-  for (const p of [...drifted].reverse()) {
+  for (const p of productionFirst(drifted)) {
     lines.push("", `### ${code(p.environment)}`, "", "| Flag | In Git | Live in Flagsmith | |", "|---|---|---|---|");
     for (const c of p.changes) {
       const d = describeDrift(c);

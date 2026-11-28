@@ -29,6 +29,10 @@ inputs:
     description: "Folder with the flag files"
     required: false
     default: "flags"
+  timeout:
+    description: "Seconds to wait for each Flagsmith call (default 30). Raise it for a slow or very large instance"
+    required: false
+    default: ""
   environments:
     description: "Comma-separated environment names to include (default: all files)"
     required: false
@@ -70,6 +74,7 @@ runs:
         FLAGSMITH_API_URL: ${{ inputs.api-url }}
         FLAGSMITH_ADMIN_KEY: ${{ inputs.admin-key }}
         FLAGSMITH_ENVIRONMENT_KEYS: ${{ inputs.environment-keys }}
+        FLAGSMITH_TIMEOUT: ${{ inputs.timeout }}
         INPUT_COMMAND: ${{ inputs.command }}
         INPUT_PROJECT: ${{ inputs.project }}
         INPUT_DIR: ${{ inputs.dir }}
