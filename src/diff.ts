@@ -157,10 +157,15 @@ export function archiveConflicts(plans: EnvironmentPlan[]): string[] {
 const changesLabel = (n: number) => `${n} change${n === 1 ? "" : "s"}`;
 
 // Order environments the way changes flow: development first, then staging, production last.
+// Production is a whole word: "Production", "prod-eu", "prd", "Live". Not "Non-Prod",
+// "Preprod" or "Product Sandbox", which rank with staging.
+const PROD_WORDS = ["prod", "production", "prd", "live"];
 function environmentRank(name: string): number {
-  const n = name.toLowerCase();
-  if (n.includes("prod") || n === "live") return 2;
-  if (n.includes("stag") || n.includes("qa") || n.includes("test") || n.includes("uat")) return 1;
+  const words = name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const negated = (i: number) => i > 0 && ["non", "pre"].includes(words[i - 1]);
+  if (words.some((w, i) => PROD_WORDS.includes(w) && !negated(i))) return 2;
+  if (words.some((w, i) => PROD_WORDS.includes(w) && negated(i))) return 1;
+  if (/stag|qa|test|uat|preprod|nonprod/.test(words.join(" "))) return 1;
   return 0;
 }
 

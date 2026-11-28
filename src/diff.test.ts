@@ -207,6 +207,15 @@ describe("formatPlanMarkdown", () => {
     expect(md.indexOf("### <code>Dev-a</code>")).toBeLessThan(md.indexOf("### <code>Dev-b</code>"));
   });
 
+  it("recognises production as a whole word, not a substring", () => {
+    const plan = diffEnvironment(wanted({ a: { enabled: true, value: null } }), live({ a: [false, null] }));
+    const md = (environment: string) => formatPlanMarkdown([{ ...plan, environment }]);
+    for (const name of ["Production", "prod-eu", "prd", "Live", "live-eu"]) expect(md(name)).toContain("(production)");
+    for (const name of ["Non-Prod", "nonprod", "Preprod", "Pre-Prod", "Product Sandbox", "Development"]) expect(md(name)).not.toContain("(production)");
+    const order = sortByEnvironment(["Production", "Non-Prod", "Development", "Preprod"].map((environment) => ({ environment })));
+    expect(order.map((p) => p.environment)).toEqual(["Development", "Non-Prod", "Preprod", "Production"]);
+  });
+
   it("says so when there is nothing to change", () => {
     const plan = diffEnvironment(wanted({ a: { enabled: true, value: null } }), live({ a: [true, null] }));
     const md = formatPlanMarkdown([plan]);
